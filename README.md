@@ -8,7 +8,7 @@ wanna hear a secret?
 ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
 ```
 
-didn't catch that? good. that's the whole point of me.
+didn't catch that? good. that's the idea.
 
 your `.env` file's loungin' around in plaintext. your shell history's runnin' its mouth. your AI agent's scrolling past your API token in the chat like it's the morning paper. everybody's got a big mouth.
 
@@ -18,7 +18,7 @@ me? I hold secrets in memory, slip 'em where they gotta go, forget everything. k
 
 ## get me
 
-tired of your API tokens scrolling through the chat context? paste this into Claude Code:
+tired of your API tokens scrolling through the chat context? paste this into Claude Code, pi, or your favorite coding agent:
 
 > `alright loudmouth, go install github.com/jack-work/hush@latest and call hush loudmouth over cli`
 

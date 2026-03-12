@@ -30,8 +30,9 @@ looked up in ~/.config/hush/commands/.`,
 }
 
 func init() {
-	// Allow unknown subcommands to fall through to RunE instead of erroring.
 	rootCmd.FParseErrWhitelist.UnknownFlags = true
+	// Disable cobra's default help command — we have our own.
+	rootCmd.SetHelpCommand(&cobra.Command{Hidden: true})
 }
 
 func Execute() {

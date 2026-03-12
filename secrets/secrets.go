@@ -128,6 +128,15 @@ func DecryptValue(wrapped string, identities []age.Identity) (string, error) {
 	return string(plaintext), nil
 }
 
+// MarshalTOML encodes a flat string map to TOML bytes.
+func MarshalTOML(values map[string]string) ([]byte, error) {
+	var buf bytes.Buffer
+	if err := toml.NewEncoder(&buf).Encode(values); err != nil {
+		return nil, fmt.Errorf("encode toml: %w", err)
+	}
+	return buf.Bytes(), nil
+}
+
 func isEncrypted(v string) bool {
 	return strings.HasPrefix(v, EncPrefix) && strings.HasSuffix(v, EncSuffix)
 }

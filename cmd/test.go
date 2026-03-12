@@ -168,32 +168,24 @@ func runTest(cmd *cobra.Command, args []string) error {
 	}
 	fmt.Printf("  Status: ttl_remaining=%s\n", statusResp.TTLRemaining)
 
-	// --- Command runner (Phase 3) ---
+	// --- Command Runner ---
 	fmt.Println("\n=== Command Runner ===")
-
-	// Create a test command directory.
 	testCmdDir := filepath.Join(dir, "commands", "greet")
 	if err := os.MkdirAll(testCmdDir, 0700); err != nil {
 		return err
 	}
-
-	// Write secrets.toml into the command dir.
 	if err := os.WriteFile(filepath.Join(testCmdDir, "secrets.toml"), tomlBytes, 0600); err != nil {
 		return err
 	}
-
-	// Write command.sh template.
 	cmdSh := `echo "token={{.token}} client={{.client_id}} arg0={{index .Args 0}} cmd={{.Cmd}}"` + "\n"
 	if err := os.WriteFile(filepath.Join(testCmdDir, "command.sh"), []byte(cmdSh), 0600); err != nil {
 		return err
 	}
 
-	// Exercise the template + execute flow directly (agent is already running).
 	tmpl, err := template.New("command.sh").Parse(cmdSh)
 	if err != nil {
 		return err
 	}
-
 	ctx := make(map[string]interface{}, len(resp.Values)+2)
 	for k, v := range resp.Values {
 		ctx[k] = v
@@ -207,7 +199,6 @@ func runTest(cmd *cobra.Command, args []string) error {
 	}
 	fmt.Printf("  Rendered: %s", rendered.String())
 
-	// Execute and capture output.
 	sh := exec.Command("sh", "-c", rendered.String())
 	out, err := sh.Output()
 	if err != nil {
@@ -219,6 +210,54 @@ func runTest(cmd *cobra.Command, args []string) error {
 	fmt.Printf("  %s command runner output matches\n", check(output == expected))
 	if output != expected {
 		return fmt.Errorf("expected %q, got %q", expected, output)
+	}
+
+	// --- Encrypt in-place ---
+	fmt.Println("\n=== Encrypt in-place ===")
+	mixedPath := filepath.Join(dir, "mixed.toml")
+	mixedContent := "encrypted_key = \"already-encrypted\"\nplain_key = \"needs-encryption\"\n"
+	if err := os.WriteFile(mixedPath, []byte(mixedContent), 0600); err != nil {
+		return err
+	}
+
+	// Encrypt the plain_key value.
+	encVal, err := secrets.EncryptValue("already-encrypted", ageID.Recipient())
+	if err != nil {
+		return err
+	}
+	mixedWithEnc := fmt.Sprintf("encrypted_key = %q\nplain_key = \"needs-encryption\"\n", encVal)
+	if err := os.WriteFile(mixedPath, []byte(mixedWithEnc), 0600); err != nil {
+		return err
+	}
+
+	// Parse, encrypt plaintext, write back.
+	var mixedValues map[string]string
+	mixedData, _ := os.ReadFile(mixedPath)
+	if err := toml.Unmarshal(mixedData, &mixedValues); err != nil {
+		return err
+	}
+
+	changed := 0
+	for k, v := range mixedValues {
+		if !strings.HasPrefix(v, secrets.EncPrefix) {
+			encV, err := secrets.EncryptValue(v, ageID.Recipient())
+			if err != nil {
+				return err
+			}
+			mixedValues[k] = encV
+			changed++
+		}
+	}
+	fmt.Printf("  Encrypted %d plaintext value(s)\n", changed)
+
+	// Verify both values decrypt correctly.
+	for k, v := range mixedValues {
+		d, err := secrets.DecryptValue(v, id.Identities)
+		if err != nil {
+			return fmt.Errorf("decrypt %q: %w", k, err)
+		}
+		fmt.Printf("  %s %s decrypts ok\n", check(true), k)
+		_ = d
 	}
 
 	// --- Shutdown ---

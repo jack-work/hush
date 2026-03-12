@@ -2,9 +2,7 @@ package cmd
 
 import (
 	"bytes"
-	"encoding/json"
 	"fmt"
-	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -102,25 +100,12 @@ func decryptViaAgent(secretsFile string) (map[string]string, error) {
 		return nil, err
 	}
 
-	// Send decrypt request.
-	conn, err := net.DialTimeout("unix", sockPath, 2*time.Second)
+	resp, err := rpc(sockPath, agent.Request{Op: "decrypt", Values: rawValues})
 	if err != nil {
-		return nil, fmt.Errorf("connect to agent: %w", err)
-	}
-	defer conn.Close()
-	conn.SetDeadline(time.Now().Add(10 * time.Second))
-
-	req := agent.Request{Op: "decrypt", Values: rawValues}
-	if err := json.NewEncoder(conn).Encode(req); err != nil {
-		return nil, fmt.Errorf("send request: %w", err)
-	}
-
-	var resp agent.Response
-	if err := json.NewDecoder(conn).Decode(&resp); err != nil {
-		return nil, fmt.Errorf("read response: %w", err)
+		return nil, fmt.Errorf("agent decrypt: %w", err)
 	}
 	if !resp.OK {
-		return nil, fmt.Errorf("agent error: %s", resp.Error)
+		return nil, fmt.Errorf("agent: %s", resp.Error)
 	}
 	return resp.Values, nil
 }

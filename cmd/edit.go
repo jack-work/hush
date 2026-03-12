@@ -10,8 +10,8 @@ import (
 	"github.com/BurntSushi/toml"
 	"github.com/spf13/cobra"
 
-	"github.com/gluck/hush/agent"
-	"github.com/gluck/hush/secrets"
+	"github.com/jack-work/hush/agent"
+	"github.com/jack-work/hush/secrets"
 )
 
 func init() {

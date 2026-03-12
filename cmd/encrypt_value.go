@@ -9,7 +9,7 @@ import (
 	"filippo.io/age"
 	"github.com/spf13/cobra"
 
-	"github.com/gluck/hush/secrets"
+	"github.com/jack-work/hush/secrets"
 )
 
 func init() {

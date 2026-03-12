@@ -1,4 +1,4 @@
-module github.com/gluck/hush
+module github.com/jack-work/hush
 
 go 1.25.5
 

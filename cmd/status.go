@@ -8,7 +8,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/gluck/hush/agent"
+	"github.com/jack-work/hush/agent"
 )
 
 func init() {

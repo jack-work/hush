@@ -10,7 +10,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/gluck/hush/identity"
+	"github.com/jack-work/hush/identity"
 )
 
 func init() {

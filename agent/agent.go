@@ -14,8 +14,8 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/gluck/hush/identity"
-	"github.com/gluck/hush/secrets"
+	"github.com/jack-work/hush/identity"
+	"github.com/jack-work/hush/secrets"
 )
 
 // Agent holds the decrypted identity and manages the unix socket listener.

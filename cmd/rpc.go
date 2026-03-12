@@ -5,7 +5,7 @@ import (
 	"net"
 	"time"
 
-	"github.com/gluck/hush/agent"
+	"github.com/jack-work/hush/agent"
 )
 
 // rpc sends a request to the agent over the unix socket and returns the response.

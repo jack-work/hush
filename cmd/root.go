@@ -6,7 +6,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/gluck/hush/config"
+	"github.com/jack-work/hush/config"
 )
 
 var cfg *config.Config

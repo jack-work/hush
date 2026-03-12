@@ -15,8 +15,8 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/gluck/hush/agent"
-	"github.com/gluck/hush/identity"
+	"github.com/jack-work/hush/agent"
+	"github.com/jack-work/hush/identity"
 )
 
 const agentChildEnv = "HUSH_AGENT_CHILD"

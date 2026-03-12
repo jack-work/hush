@@ -1,3 +1,8 @@
+// Package secrets handles per-value age encryption inside flat TOML files.
+//
+// All TOML values must be quoted strings — no bare integers, booleans, or
+// nested tables. The file format is strictly key = "value" pairs so that
+// unmarshal into map[string]string works without ambiguity.
 package secrets
 
 import (
@@ -13,8 +18,8 @@ import (
 )
 
 const (
-	encPrefix = "AGE-ENC["
-	encSuffix = "]"
+	EncPrefix = "AGE-ENC["
+	EncSuffix = "]"
 )
 
 // DecryptFile reads a TOML file from disk, decrypts any AGE-ENC[] wrapped
@@ -50,9 +55,14 @@ func DecryptFile(path string, identities []age.Identity) (map[string]string, err
 // which keys should be encrypted. For keys in keysToEncrypt, age-encrypt
 // the value to the recipient, base64 encode, wrap in AGE-ENC[...]. Leave
 // all other keys as plaintext. Marshal to TOML and return the bytes.
+// TODO: use a structured value in the map to indicate which should be encrypted
+// rather than string with adjacent list.
 func EncryptFile(values map[string]string, recipient age.Recipient, keysToEncrypt []string) ([]byte, error) {
 	encrypt := make(map[string]bool, len(keysToEncrypt))
 	for _, k := range keysToEncrypt {
+		if _, ok := values[k]; !ok {
+			return nil, fmt.Errorf("key %q listed in keysToEncrypt but not found in values", k)
+		}
 		encrypt[k] = true
 	}
 
@@ -90,7 +100,7 @@ func EncryptValue(plaintext string, recipient age.Recipient) (string, error) {
 		return "", err
 	}
 	encoded := base64.StdEncoding.EncodeToString(buf.Bytes())
-	return encPrefix + encoded + encSuffix, nil
+	return EncPrefix + encoded + EncSuffix, nil
 }
 
 // DecryptValue takes an AGE-ENC[...] wrapped string, unwraps, base64 decodes,
@@ -100,7 +110,7 @@ func DecryptValue(wrapped string, identities []age.Identity) (string, error) {
 		return "", fmt.Errorf("value is not AGE-ENC wrapped")
 	}
 
-	inner := wrapped[len(encPrefix) : len(wrapped)-len(encSuffix)]
+	inner := wrapped[len(EncPrefix) : len(wrapped)-len(EncSuffix)]
 	ciphertext, err := base64.StdEncoding.DecodeString(inner)
 	if err != nil {
 		return "", fmt.Errorf("base64 decode: %w", err)
@@ -119,5 +129,5 @@ func DecryptValue(wrapped string, identities []age.Identity) (string, error) {
 }
 
 func isEncrypted(v string) bool {
-	return strings.HasPrefix(v, encPrefix) && strings.HasSuffix(v, encSuffix)
+	return strings.HasPrefix(v, EncPrefix) && strings.HasSuffix(v, EncSuffix)
 }

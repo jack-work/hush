@@ -17,11 +17,33 @@ type DecryptedIdentity struct {
 	Identities []age.Identity
 }
 
+// WriteTo writes the raw key bytes to w and then zeros them. After calling
+// WriteTo, the identity can no longer be transferred — only the in-memory
+// parsed Identities remain usable.
+func (d *DecryptedIdentity) WriteTo(w io.Writer) (int64, error) {
+	n, err := w.Write(d.raw)
+	for i := range d.raw {
+		d.raw[i] = 0
+	}
+	return int64(n), err
+}
+
 // Zero overwrites the raw key material.
 func (d *DecryptedIdentity) Zero() {
 	for i := range d.raw {
 		d.raw[i] = 0
 	}
+}
+
+// ParseRaw creates a DecryptedIdentity from raw age identity bytes (as read
+// from a pipe in daemon mode). The caller is responsible for zeroing the
+// input slice if needed.
+func ParseRaw(raw []byte) (*DecryptedIdentity, error) {
+	identities, err := age.ParseIdentities(bytes.NewReader(raw))
+	if err != nil {
+		return nil, fmt.Errorf("parse identities: %w", err)
+	}
+	return &DecryptedIdentity{raw: raw, Identities: identities}, nil
 }
 
 // Unlock reads a passphrase-encrypted age identity file and decrypts it.
@@ -66,6 +88,35 @@ func Unlock(path string, passphrase []byte) (*DecryptedIdentity, error) {
 	}
 
 	return &DecryptedIdentity{raw: raw, Identities: identities}, nil
+}
+
+// EncryptToFile writes keyData to outPath, encrypted with a passphrase via
+// age's scrypt recipient. The file is created with 0600 permissions and
+// O_EXCL to prevent overwriting.
+func EncryptToFile(keyData []byte, outPath, passphrase string) error {
+	recipient, err := age.NewScryptRecipient(passphrase)
+	if err != nil {
+		return fmt.Errorf("scrypt recipient: %w", err)
+	}
+
+	f, err := os.OpenFile(outPath, os.O_CREATE|os.O_WRONLY|os.O_EXCL, 0600)
+	if err != nil {
+		return fmt.Errorf("create identity file: %w", err)
+	}
+	defer f.Close()
+
+	aw := armor.NewWriter(f)
+	w, err := age.Encrypt(aw, recipient)
+	if err != nil {
+		return err
+	}
+	if _, err := w.Write(keyData); err != nil {
+		return err
+	}
+	if err := w.Close(); err != nil {
+		return err
+	}
+	return aw.Close()
 }
 
 // UnlockPlaintext reads an unencrypted age identity file (for testing / convenience).

@@ -11,6 +11,7 @@ import (
 
 	"github.com/BurntSushi/toml"
 	"github.com/spf13/cobra"
+	"golang.org/x/term"
 
 	"github.com/jack-work/hush/agent"
 	"github.com/jack-work/hush/identity"
@@ -111,7 +112,8 @@ func decryptViaAgent(secretsFile string) (map[string]string, error) {
 }
 
 // ensureAgent checks if an agent is running. If not, starts one implicitly
-// (same as hush up -d).
+// when a TTY is available. In non-interactive contexts (agents, pipes, cron),
+// returns a clear error telling the user to start the agent manually.
 func ensureAgent(sockPath string) error {
 	if err := pingAgent(sockPath); err == nil {
 		return nil // agent is alive
@@ -119,6 +121,11 @@ func ensureAgent(sockPath string) error {
 
 	// No agent — clean up stale socket if present.
 	os.Remove(sockPath)
+
+	// Check if we have an interactive terminal for passphrase input.
+	if !term.IsTerminal(int(os.Stdin.Fd())) {
+		return fmt.Errorf("hush agent is not running and no interactive terminal is available to prompt for a passphrase.\n\nStart the agent manually from an interactive shell:\n\n  hush up -d")
+	}
 
 	fmt.Fprintln(os.Stderr, "No running agent. Starting one...")
 

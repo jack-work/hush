@@ -57,7 +57,7 @@ func runEncrypt(cmd *cobra.Command, args []string) error {
 	} else {
 		// All plaintext values.
 		for k, v := range values {
-			if !isEncrypted(v) {
+			if !secrets.IsEncrypted(v) {
 				targets[k] = true
 			}
 		}
@@ -69,7 +69,7 @@ func runEncrypt(cmd *cobra.Command, args []string) error {
 		if !ok {
 			return fmt.Errorf("key %q not found in %s", k, secretsPath)
 		}
-		if isEncrypted(v) {
+		if secrets.IsEncrypted(v) {
 			fmt.Fprintf(os.Stderr, "  %s: already encrypted, skipping\n", k)
 			continue
 		}
@@ -109,6 +109,3 @@ func loadRecipient() (age.Recipient, error) {
 	return age.ParseX25519Recipient(strings.TrimSpace(string(pubData)))
 }
 
-func isEncrypted(v string) bool {
-	return strings.HasPrefix(v, secrets.EncPrefix) && strings.HasSuffix(v, secrets.EncSuffix)
-}

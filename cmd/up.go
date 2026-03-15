@@ -1,11 +1,9 @@
 package cmd
 
 import (
-	"encoding/json"
 	"fmt"
 	"io"
 	"log"
-	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -16,6 +14,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/jack-work/hush/agent"
+	"github.com/jack-work/hush/client"
 	"github.com/jack-work/hush/identity"
 )
 
@@ -179,24 +178,7 @@ func waitForAgent(runtimeDir string, timeout time.Duration) error {
 }
 
 func pingAgent(sockPath string) error {
-	conn, err := net.DialTimeout("unix", sockPath, time.Second)
-	if err != nil {
-		return err
-	}
-	defer conn.Close()
-
-	if err := json.NewEncoder(conn).Encode(agent.Request{Op: "status"}); err != nil {
-		return err
-	}
-
-	var resp agent.Response
-	if err := json.NewDecoder(conn).Decode(&resp); err != nil {
-		return err
-	}
-	if !resp.OK {
-		return fmt.Errorf("agent error: %s", resp.Error)
-	}
-	return nil
+	return client.Ping(sockPath)
 }
 
 func newLogger(stateDir string) (*log.Logger, *os.File, error) {

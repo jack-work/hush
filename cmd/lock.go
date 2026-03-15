@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 
 	"github.com/BurntSushi/toml"
 	"github.com/spf13/cobra"
@@ -53,7 +52,7 @@ func runLock(cmd *cobra.Command, args []string) error {
 
 		count := 0
 		for k, v := range values {
-			if strings.HasPrefix(v, secrets.EncPrefix) && strings.HasSuffix(v, secrets.EncSuffix) {
+			if secrets.IsEncrypted(v) {
 				continue
 			}
 			enc, err := secrets.EncryptValue(v, recipient)

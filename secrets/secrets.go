@@ -38,7 +38,7 @@ func DecryptFile(path string, identities []age.Identity) (map[string]string, err
 
 	out := make(map[string]string, len(raw))
 	for k, v := range raw {
-		if isEncrypted(v) {
+		if IsEncrypted(v) {
 			dec, err := DecryptValue(v, identities)
 			if err != nil {
 				return nil, fmt.Errorf("decrypt key %q: %w", k, err)
@@ -106,7 +106,7 @@ func EncryptValue(plaintext string, recipient age.Recipient) (string, error) {
 // DecryptValue takes an AGE-ENC[...] wrapped string, unwraps, base64 decodes,
 // age decrypts, and returns the plaintext.
 func DecryptValue(wrapped string, identities []age.Identity) (string, error) {
-	if !isEncrypted(wrapped) {
+	if !IsEncrypted(wrapped) {
 		return "", fmt.Errorf("value is not AGE-ENC wrapped")
 	}
 
@@ -137,6 +137,7 @@ func MarshalTOML(values map[string]string) ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
-func isEncrypted(v string) bool {
+// IsEncrypted reports whether a value is wrapped in AGE-ENC[...].
+func IsEncrypted(v string) bool {
 	return strings.HasPrefix(v, EncPrefix) && strings.HasSuffix(v, EncSuffix)
 }

@@ -42,11 +42,23 @@ Built-in commands:
 		fmt.Printf("\nYour commands (%s):\n", cfg.CommandsDir)
 		for _, name := range commands {
 			cmdDir := filepath.Join(cfg.CommandsDir, name)
-			detail := ""
+			hasSecrets := false
 			if _, err := os.Stat(filepath.Join(cmdDir, "secrets.toml")); err == nil {
-				detail = " (has secrets)"
+				hasSecrets = true
 			}
-			fmt.Printf("  %-16s hush %s [args...]%s\n", name, name, detail)
+			hasCommand := false
+			if _, err := os.Stat(filepath.Join(cmdDir, "command.sh")); err == nil {
+				hasCommand = true
+			}
+			if hasCommand {
+				detail := ""
+				if hasSecrets {
+					detail = " (has secrets)"
+				}
+				fmt.Printf("  %-16s hush %s [args...]%s\n", name, name, detail)
+			} else if hasSecrets {
+				fmt.Printf("  %-16s config-only — secrets for library use\n", name)
+			}
 		}
 	} else {
 		fmt.Println("\nNo commands yet. Run 'hush hush <name>' to create one.")

@@ -11,6 +11,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/jack-work/hush/agent"
+	"github.com/jack-work/hush/client"
 	"github.com/jack-work/hush/secrets"
 )
 
@@ -139,7 +140,7 @@ func runEdit(cmd *cobra.Command, args []string) error {
 }
 
 func decryptMap(sockPath string, raw map[string]string) (map[string]string, error) {
-	resp, err := rpc(sockPath, agent.Request{Op: "decrypt", Values: raw})
+	resp, err := client.RPC(sockPath, agent.Request{Op: "decrypt", Values: raw})
 	if err != nil {
 		return nil, fmt.Errorf("agent decrypt: %w", err)
 	}

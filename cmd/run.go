@@ -14,6 +14,7 @@ import (
 	"golang.org/x/term"
 
 	"github.com/jack-work/hush/agent"
+	"github.com/jack-work/hush/client"
 	"github.com/jack-work/hush/identity"
 )
 
@@ -34,6 +35,14 @@ func runCmd(cmd *cobra.Command, args []string) error {
 	cmdFile := filepath.Join(cmdDir, "command.sh")
 	cmdBytes, err := os.ReadFile(cmdFile)
 	if err != nil {
+		// Check if this is a config-only command (has secrets.toml but no command.sh).
+		secretsFile := filepath.Join(cmdDir, "secrets.toml")
+		if _, secErr := os.Stat(secretsFile); secErr == nil {
+			return fmt.Errorf("hey — %q is config-only, pal. no command.sh in there.\n\n"+
+				"this one's meant to be read by another program through the hush client library.\n"+
+				"it holds secrets, sure, but it don't run nothin'. that's someone else's job.\n\n"+
+				"if you meant to make it runnable, drop a command.sh in:\n  %s", name, cmdDir)
+		}
 		return fmt.Errorf("command %q missing command.sh (expected at %s)", name, cmdFile)
 	}
 
@@ -101,7 +110,7 @@ func decryptViaAgent(secretsFile string) (map[string]string, error) {
 		return nil, err
 	}
 
-	resp, err := rpc(sockPath, agent.Request{Op: "decrypt", Values: rawValues})
+	resp, err := client.RPC(sockPath, agent.Request{Op: "decrypt", Values: rawValues})
 	if err != nil {
 		return nil, fmt.Errorf("agent decrypt: %w", err)
 	}

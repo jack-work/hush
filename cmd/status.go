@@ -9,6 +9,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/jack-work/hush/agent"
+	"github.com/jack-work/hush/client"
 )
 
 func init() {
@@ -45,17 +46,27 @@ func runStatus(cmd *cobra.Command, args []string) error {
 	fmt.Printf("\nCommands: %d\n", len(commands))
 	for _, name := range commands {
 		cmdDir := filepath.Join(cfg.CommandsDir, name)
-		hasSecrets := "no secrets"
+		hasSecrets := false
 		if _, err := os.Stat(filepath.Join(cmdDir, "secrets.toml")); err == nil {
-			hasSecrets = "has secrets"
+			hasSecrets = true
 		}
-		fmt.Printf("  %s (%s)\n", name, hasSecrets)
+		hasCommand := false
+		if _, err := os.Stat(filepath.Join(cmdDir, "command.sh")); err == nil {
+			hasCommand = true
+		}
+		detail := "no secrets"
+		if hasSecrets && hasCommand {
+			detail = "has secrets"
+		} else if hasSecrets && !hasCommand {
+			detail = "config-only"
+		}
+		fmt.Printf("  %s (%s)\n", name, detail)
 	}
 
 	// Agent.
 	fmt.Println()
 	sockPath := filepath.Join(cfg.RuntimeDir, "agent.sock")
-	resp, err := rpc(sockPath, agent.Request{Op: "status"})
+	resp, err := client.RPC(sockPath, agent.Request{Op: "status"})
 	if err == nil && resp.OK {
 		pidData, _ := os.ReadFile(filepath.Join(cfg.RuntimeDir, "agent.pid"))
 		fmt.Printf("Agent: ✓ running (pid %s, ttl remaining %s)\n",

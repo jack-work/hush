@@ -128,7 +128,7 @@ func (a *Agent) handleConn(conn net.Conn) {
 func (a *Agent) handleDecrypt(req Request) []byte {
 	out := make(map[string]string, len(req.Values))
 	for k, v := range req.Values {
-		if strings.HasPrefix(v, secrets.EncPrefix) && strings.HasSuffix(v, secrets.EncSuffix) {
+		if secrets.IsEncrypted(v) {
 			dec, err := secrets.DecryptValue(v, a.id.Identities)
 			if err != nil {
 				return errResponse(fmt.Sprintf("decrypt %q: %v", k, err))

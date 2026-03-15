@@ -8,7 +8,6 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/jack-work/hush/agent"
 	"github.com/jack-work/hush/client"
 )
 
@@ -66,11 +65,12 @@ func runStatus(cmd *cobra.Command, args []string) error {
 	// Agent.
 	fmt.Println()
 	sockPath := filepath.Join(cfg.RuntimeDir, "agent.sock")
-	resp, err := client.RPC(sockPath, agent.Request{Op: "status"})
-	if err == nil && resp.OK {
+	c := client.NewWithSocket(sockPath)
+	ttl, err := c.Status()
+	if err == nil {
 		pidData, _ := os.ReadFile(filepath.Join(cfg.RuntimeDir, "agent.pid"))
 		fmt.Printf("Agent: ✓ running (pid %s, ttl remaining %s)\n",
-			strings.TrimSpace(string(pidData)), resp.TTLRemaining)
+			strings.TrimSpace(string(pidData)), ttl)
 	} else {
 		fmt.Println("Agent: ✗ not running")
 	}

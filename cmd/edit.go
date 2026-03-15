@@ -5,12 +5,10 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strings"
 
 	"github.com/BurntSushi/toml"
 	"github.com/spf13/cobra"
 
-	"github.com/jack-work/hush/agent"
 	"github.com/jack-work/hush/client"
 	"github.com/jack-work/hush/secrets"
 )
@@ -43,6 +41,7 @@ func runEdit(cmd *cobra.Command, args []string) error {
 	if err := ensureAgent(sockPath); err != nil {
 		return err
 	}
+	c := client.NewWithSocket(sockPath)
 
 	var currentValues map[string]string
 	data, err := os.ReadFile(secretsPath)
@@ -58,7 +57,7 @@ func runEdit(cmd *cobra.Command, args []string) error {
 			return fmt.Errorf("parse secrets: %w", err)
 		}
 		// Decrypt via agent to get plaintext for editing.
-		currentValues, err = decryptMap(sockPath, raw)
+		currentValues, err = c.Decrypt(raw)
 		if err != nil {
 			return err
 		}
@@ -102,25 +101,8 @@ func runEdit(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("parse edited file: %w", err)
 	}
 
-	// Encrypt all values.
-	recipient, err := loadRecipient()
-	if err != nil {
-		return err
-	}
-
-	encrypted := make(map[string]string, len(editedValues))
-	for k, v := range editedValues {
-		// If value is already AGE-ENC wrapped (user pasted one in), keep it.
-		if strings.HasPrefix(v, secrets.EncPrefix) && strings.HasSuffix(v, secrets.EncSuffix) {
-			encrypted[k] = v
-			continue
-		}
-		enc, err := secrets.EncryptValue(v, recipient)
-		if err != nil {
-			return fmt.Errorf("encrypt %q: %w", k, err)
-		}
-		encrypted[k] = enc
-	}
+	// Encrypt all values via agent (already-encrypted values pass through).
+	encrypted, err := c.Encrypt(editedValues)
 
 	out, err := secrets.MarshalTOML(encrypted)
 	if err != nil {
@@ -139,13 +121,3 @@ func runEdit(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-func decryptMap(sockPath string, raw map[string]string) (map[string]string, error) {
-	resp, err := client.RPC(sockPath, agent.Request{Op: "decrypt", Values: raw})
-	if err != nil {
-		return nil, fmt.Errorf("agent decrypt: %w", err)
-	}
-	if !resp.OK {
-		return nil, fmt.Errorf("agent: %s", resp.Error)
-	}
-	return resp.Values, nil
-}

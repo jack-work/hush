@@ -14,6 +14,7 @@ import (
 	"syscall"
 	"time"
 
+	"filippo.io/age"
 	"github.com/jack-work/hush/identity"
 	"github.com/jack-work/hush/secrets"
 )
@@ -115,6 +116,8 @@ func (a *Agent) handleConn(conn net.Conn) {
 	switch req.Op {
 	case "decrypt":
 		resp = a.handleDecrypt(req)
+	case "encrypt":
+		resp = a.handleEncrypt(req)
 	case "status":
 		resp = a.handleStatus()
 	default:
@@ -139,6 +142,38 @@ func (a *Agent) handleDecrypt(req Request) []byte {
 		}
 	}
 	return okResponse(Response{Values: out})
+}
+
+func (a *Agent) handleEncrypt(req Request) []byte {
+	recipient, err := a.recipient()
+	if err != nil {
+		return errResponse(err.Error())
+	}
+
+	out := make(map[string]string, len(req.Values))
+	for k, v := range req.Values {
+		if secrets.IsEncrypted(v) {
+			// Already encrypted, pass through.
+			out[k] = v
+		} else {
+			enc, err := secrets.EncryptValue(v, recipient)
+			if err != nil {
+				return errResponse(fmt.Sprintf("encrypt %q: %v", k, err))
+			}
+			out[k] = enc
+		}
+	}
+	return okResponse(Response{Values: out})
+}
+
+// recipient derives the public key from the first X25519 identity.
+func (a *Agent) recipient() (age.Recipient, error) {
+	for _, id := range a.id.Identities {
+		if x, ok := id.(*age.X25519Identity); ok {
+			return x.Recipient(), nil
+		}
+	}
+	return nil, fmt.Errorf("no X25519 identity available for encryption")
 }
 
 func (a *Agent) handleStatus() []byte {

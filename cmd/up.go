@@ -178,7 +178,7 @@ func waitForAgent(runtimeDir string, timeout time.Duration) error {
 }
 
 func pingAgent(sockPath string) error {
-	return client.Ping(sockPath)
+	return client.NewWithSocket(sockPath).Ping()
 }
 
 func newLogger(stateDir string) (*log.Logger, *os.File, error) {

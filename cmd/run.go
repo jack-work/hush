@@ -13,7 +13,6 @@ import (
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
 
-	"github.com/jack-work/hush/agent"
 	"github.com/jack-work/hush/client"
 	"github.com/jack-work/hush/identity"
 )
@@ -110,14 +109,8 @@ func decryptViaAgent(secretsFile string) (map[string]string, error) {
 		return nil, err
 	}
 
-	resp, err := client.RPC(sockPath, agent.Request{Op: "decrypt", Values: rawValues})
-	if err != nil {
-		return nil, fmt.Errorf("agent decrypt: %w", err)
-	}
-	if !resp.OK {
-		return nil, fmt.Errorf("agent: %s", resp.Error)
-	}
-	return resp.Values, nil
+	c := client.NewWithSocket(sockPath)
+	return c.Decrypt(rawValues)
 }
 
 // ensureAgent checks if an agent is running. If not, starts one implicitly

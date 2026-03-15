@@ -20,6 +20,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/jack-work/hush/agent"
+	"github.com/jack-work/hush/client"
 	"github.com/jack-work/hush/identity"
 	"github.com/jack-work/hush/secrets"
 )
@@ -167,6 +168,76 @@ func runTest(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("status rpc: %w", err)
 	}
 	fmt.Printf("  Status: ttl_remaining=%s\n", statusResp.TTLRemaining)
+
+	// --- Encrypt via agent ---
+	fmt.Println("\n=== Encrypt via Agent ===")
+	plainValues := map[string]string{
+		"secret_key":  "my-secret-value",
+		"public_key":  "not-secret",
+	}
+	encResp, err := testRPC(sockPath, agent.Request{Op: "encrypt", Values: plainValues})
+	if err != nil {
+		return fmt.Errorf("encrypt rpc: %w", err)
+	}
+	if !encResp.OK {
+		return fmt.Errorf("encrypt failed: %s", encResp.Error)
+	}
+	fmt.Printf("  %s secret_key is AGE-ENC wrapped\n", check(secrets.IsEncrypted(encResp.Values["secret_key"])))
+	fmt.Printf("  %s public_key is AGE-ENC wrapped\n", check(secrets.IsEncrypted(encResp.Values["public_key"])))
+
+	// Round-trip: decrypt what we just encrypted.
+	rtResp, err := testRPC(sockPath, agent.Request{Op: "decrypt", Values: encResp.Values})
+	if err != nil {
+		return fmt.Errorf("round-trip decrypt rpc: %w", err)
+	}
+	if !rtResp.OK {
+		return fmt.Errorf("round-trip decrypt failed: %s", rtResp.Error)
+	}
+	fmt.Println("  Round-trip encrypt → decrypt:")
+	for k, orig := range plainValues {
+		fmt.Printf("    %s %s = %q\n", check(rtResp.Values[k] == orig), k, rtResp.Values[k])
+	}
+
+	// Already-encrypted values pass through.
+	alreadyEnc := map[string]string{
+		"wrapped": encResp.Values["secret_key"],
+		"plain":   "new-value",
+	}
+	passResp, err := testRPC(sockPath, agent.Request{Op: "encrypt", Values: alreadyEnc})
+	if err != nil {
+		return fmt.Errorf("passthrough rpc: %w", err)
+	}
+	if !passResp.OK {
+		return fmt.Errorf("passthrough failed: %s", passResp.Error)
+	}
+	fmt.Printf("  %s already-encrypted value passed through unchanged\n",
+		check(passResp.Values["wrapped"] == alreadyEnc["wrapped"]))
+	fmt.Printf("  %s plain value got encrypted\n",
+		check(secrets.IsEncrypted(passResp.Values["plain"])))
+
+	// --- Client Library ---
+	fmt.Println("\n=== Client Library ===")
+	c := client.NewWithSocket(sockPath)
+
+	clientEnc, err := c.Encrypt(map[string]string{"key": "library-test"})
+	if err != nil {
+		return fmt.Errorf("client encrypt: %w", err)
+	}
+	fmt.Printf("  %s client.Encrypt works\n", check(secrets.IsEncrypted(clientEnc["key"])))
+
+	clientDec, err := c.Decrypt(clientEnc)
+	if err != nil {
+		return fmt.Errorf("client decrypt: %w", err)
+	}
+	fmt.Printf("  %s client.Decrypt round-trip = %q\n", check(clientDec["key"] == "library-test"), clientDec["key"])
+
+	ttlRemaining, err := c.Status()
+	if err != nil {
+		return fmt.Errorf("client status: %w", err)
+	}
+	fmt.Printf("  %s client.Status = %s\n", check(ttlRemaining != ""), ttlRemaining)
+
+	fmt.Printf("  %s client.Ping\n", check(c.Ping() == nil))
 
 	// --- Command Runner ---
 	fmt.Println("\n=== Command Runner ===")

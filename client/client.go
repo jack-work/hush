@@ -82,6 +82,18 @@ func (c *Client) Status() (string, error) {
 	return resp.TTLRemaining, nil
 }
 
+// Version returns the version of the running agent.
+func (c *Client) Version() (string, error) {
+	resp, err := c.rpc(agent.Request{Op: "version"})
+	if err != nil {
+		return "", err
+	}
+	if !resp.OK {
+		return "", fmt.Errorf("agent error: %s", resp.Error)
+	}
+	return resp.Version, nil
+}
+
 // Ping checks whether the agent is alive and responding.
 func (c *Client) Ping() error {
 	_, err := c.Status()

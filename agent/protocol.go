@@ -14,6 +14,7 @@ type Response struct {
 	Error        string            `json:"error,omitempty"`
 	Values       map[string]string `json:"values,omitempty"`        // used by "decrypt"
 	TTLRemaining string            `json:"ttl_remaining,omitempty"` // used by "status"
+	Version      string            `json:"version,omitempty"`       // used by "version"
 }
 
 func errResponse(msg string) []byte {

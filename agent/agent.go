@@ -17,6 +17,7 @@ import (
 	"filippo.io/age"
 	"github.com/jack-work/hush/identity"
 	"github.com/jack-work/hush/secrets"
+	"github.com/jack-work/hush/version"
 )
 
 // Agent holds the decrypted identity and manages the unix socket listener.
@@ -120,6 +121,8 @@ func (a *Agent) handleConn(conn net.Conn) {
 		resp = a.handleEncrypt(req)
 	case "status":
 		resp = a.handleStatus()
+	case "version":
+		resp = a.handleVersion()
 	default:
 		resp = errResponse(fmt.Sprintf("unknown op: %q", req.Op))
 	}
@@ -174,6 +177,10 @@ func (a *Agent) recipient() (age.Recipient, error) {
 		}
 	}
 	return nil, fmt.Errorf("no X25519 identity available for encryption")
+}
+
+func (a *Agent) handleVersion() []byte {
+	return okResponse(Response{Version: version.Version})
 }
 
 func (a *Agent) handleStatus() []byte {

@@ -9,6 +9,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/jack-work/hush/client"
+	"github.com/jack-work/hush/version"
 )
 
 func init() {
@@ -22,6 +23,7 @@ var statusCmd = &cobra.Command{
 }
 
 func runStatus(cmd *cobra.Command, args []string) error {
+	fmt.Printf("Version: %s\n\n", version.Version)
 	fmt.Println("Config:")
 	fmt.Printf("  config dir:   %s\n", cfg.ConfigDir)
 	fmt.Printf("  commands dir: %s\n", cfg.CommandsDir)
@@ -69,8 +71,12 @@ func runStatus(cmd *cobra.Command, args []string) error {
 	ttl, err := c.Status()
 	if err == nil {
 		pidData, _ := os.ReadFile(filepath.Join(cfg.RuntimeDir, "agent.pid"))
-		fmt.Printf("Agent: ✓ running (pid %s, ttl remaining %s)\n",
-			strings.TrimSpace(string(pidData)), ttl)
+		agentVer := "unknown"
+		if v, verr := c.Version(); verr == nil {
+			agentVer = v
+		}
+		fmt.Printf("Agent: ✓ running (pid %s, version %s, ttl remaining %s)\n",
+			strings.TrimSpace(string(pidData)), agentVer, ttl)
 	} else {
 		fmt.Println("Agent: ✗ not running")
 	}

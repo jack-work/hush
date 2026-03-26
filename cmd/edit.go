@@ -13,7 +13,10 @@ import (
 	"github.com/jack-work/hush/secrets"
 )
 
+var editFile string
+
 func init() {
+	editCmd.Flags().StringVarP(&editFile, "file", "f", "", "path to secrets file (default: <commands-dir>/<name>/secrets.toml)")
 	rootCmd.AddCommand(editCmd)
 }
 
@@ -30,6 +33,9 @@ will start one implicitly.`,
 func runEdit(cmd *cobra.Command, args []string) error {
 	name := args[0]
 	secretsPath := filepath.Join(cfg.CommandsDir, name, "secrets.toml")
+	if editFile != "" {
+		secretsPath = editFile
+	}
 
 	editor := os.Getenv("EDITOR")
 	if editor == "" {

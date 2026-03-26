@@ -13,10 +13,14 @@ import (
 	"github.com/jack-work/hush/secrets"
 )
 
-var encryptKeys []string
+var (
+	encryptKeys []string
+	encryptOut  string
+)
 
 func init() {
 	encryptCmd.Flags().StringSliceVar(&encryptKeys, "key", nil, "encrypt only these keys (default: all plaintext)")
+	encryptCmd.Flags().StringVarP(&encryptOut, "out", "o", "", "write output to file instead of overwriting secrets.toml")
 	rootCmd.AddCommand(encryptCmd)
 }
 
@@ -92,11 +96,16 @@ func runEncrypt(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
-	if err := os.WriteFile(secretsPath, out, 0600); err != nil {
+
+	outPath := secretsPath
+	if encryptOut != "" {
+		outPath = encryptOut
+	}
+	if err := os.WriteFile(outPath, out, 0600); err != nil {
 		return err
 	}
 
-	fmt.Fprintf(os.Stderr, "encrypted %d value(s) in %s\n", count, secretsPath)
+	fmt.Fprintf(os.Stderr, "encrypted %d value(s) in %s\n", count, outPath)
 	return nil
 }
 

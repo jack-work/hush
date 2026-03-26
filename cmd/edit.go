@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 
 	"github.com/BurntSushi/toml"
 	"github.com/spf13/cobra"
@@ -58,27 +59,86 @@ func runEdit(cmd *cobra.Command, args []string) error {
 	}
 	c := client.NewWithSocket(sockPath)
 
-	var currentValues map[string]string
 	data, err := os.ReadFile(secretsPath)
-	if os.IsNotExist(err) {
-		// New file — start empty.
-		currentValues = make(map[string]string)
-	} else if err != nil {
+	if err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("read secrets: %w", err)
+	}
+
+	// Detect whether the file is a single AGE-ENC[...] blob or TOML key-value pairs.
+	content := strings.TrimSpace(string(data))
+	wholeFile := len(data) > 0 && secrets.IsEncrypted(content)
+
+	if wholeFile {
+		return editWholeFile(c, editor, secretsPath, content)
+	}
+	return editTOML(c, editor, secretsPath, data)
+}
+
+// editWholeFile handles files that are a single AGE-ENC[...] blob.
+// Decrypts the whole content, opens in editor, re-encrypts on save.
+func editWholeFile(c *client.Client, editor, secretsPath, encrypted string) error {
+	result, err := c.Decrypt(map[string]string{"_": encrypted})
+	if err != nil {
+		return err
+	}
+	plaintext := result["_"]
+
+	tmp, err := os.CreateTemp("", "hush-edit-*")
+	if err != nil {
+		return err
+	}
+	tmpPath := tmp.Name()
+	defer os.Remove(tmpPath)
+
+	if _, err := tmp.WriteString(plaintext); err != nil {
+		tmp.Close()
+		return err
+	}
+	tmp.Close()
+
+	editorCmd := exec.Command(editor, tmpPath)
+	editorCmd.Stdin = os.Stdin
+	editorCmd.Stdout = os.Stdout
+	editorCmd.Stderr = os.Stderr
+	if err := editorCmd.Run(); err != nil {
+		return fmt.Errorf("editor: %w", err)
+	}
+
+	editedData, err := os.ReadFile(tmpPath)
+	if err != nil {
+		return err
+	}
+
+	result, err = c.Encrypt(map[string]string{"_": string(editedData)})
+	if err != nil {
+		return err
+	}
+
+	if err := os.WriteFile(secretsPath, []byte(result["_"]+"\n"), 0600); err != nil {
+		return err
+	}
+
+	fmt.Fprintf(os.Stderr, "saved encrypted file %s\n", secretsPath)
+	return nil
+}
+
+// editTOML handles TOML files with per-value AGE-ENC[...] encryption.
+func editTOML(c *client.Client, editor, secretsPath string, data []byte) error {
+	var currentValues map[string]string
+	if len(data) == 0 {
+		currentValues = make(map[string]string)
 	} else {
-		// Parse raw TOML.
 		var raw map[string]string
 		if err := toml.Unmarshal(data, &raw); err != nil {
 			return fmt.Errorf("parse secrets: %w", err)
 		}
-		// Decrypt via agent to get plaintext for editing.
+		var err error
 		currentValues, err = c.Decrypt(raw)
 		if err != nil {
 			return err
 		}
 	}
 
-	// Write plaintext to temp file.
 	tmp, err := os.CreateTemp("", "hush-edit-*.toml")
 	if err != nil {
 		return err
@@ -96,7 +156,6 @@ func runEdit(cmd *cobra.Command, args []string) error {
 	}
 	tmp.Close()
 
-	// Open editor.
 	editorCmd := exec.Command(editor, tmpPath)
 	editorCmd.Stdin = os.Stdin
 	editorCmd.Stdout = os.Stdout
@@ -105,7 +164,6 @@ func runEdit(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("editor: %w", err)
 	}
 
-	// Read back edited values.
 	editedData, err := os.ReadFile(tmpPath)
 	if err != nil {
 		return err
@@ -116,15 +174,16 @@ func runEdit(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("parse edited file: %w", err)
 	}
 
-	// Encrypt all values via agent (already-encrypted values pass through).
 	encrypted, err := c.Encrypt(editedValues)
+	if err != nil {
+		return err
+	}
 
 	out, err := secrets.MarshalTOML(encrypted)
 	if err != nil {
 		return err
 	}
 
-	// Ensure command directory exists (for new files).
 	if err := os.MkdirAll(filepath.Dir(secretsPath), 0700); err != nil {
 		return err
 	}

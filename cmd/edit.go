@@ -21,20 +21,29 @@ func init() {
 }
 
 var editCmd = &cobra.Command{
-	Use:   "edit <name>",
+	Use:   "edit [name]",
 	Short: "Edit a command's secrets in $EDITOR",
 	Long: `Decrypt secrets.toml to a temp file, open it in $EDITOR, and re-encrypt
 any changed or new plaintext values on save. Requires a running agent or
-will start one implicitly.`,
-	Args: cobra.ExactArgs(1),
+will start one implicitly.
+
+Use -f to edit an arbitrary secrets file instead of a named command:
+  hush edit -f path/to/secrets.toml`,
+	Args: func(cmd *cobra.Command, args []string) error {
+		if editFile != "" {
+			return cobra.MaximumNArgs(0)(cmd, args)
+		}
+		return cobra.ExactArgs(1)(cmd, args)
+	},
 	RunE: runEdit,
 }
 
 func runEdit(cmd *cobra.Command, args []string) error {
-	name := args[0]
-	secretsPath := filepath.Join(cfg.CommandsDir, name, "secrets.toml")
+	var secretsPath string
 	if editFile != "" {
 		secretsPath = editFile
+	} else {
+		secretsPath = filepath.Join(cfg.CommandsDir, args[0], "secrets.toml")
 	}
 
 	editor := os.Getenv("EDITOR")

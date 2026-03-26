@@ -33,6 +33,7 @@ Built-in commands:
   hush <name>     Bootstrap a new command with one secret
   encrypt <name>  Encrypt plaintext values in a command's secrets.toml
   encrypt-value   Encrypt a single string, print AGE-ENC[...] to stdout
+  decrypt-value   Decrypt a single AGE-ENC[...] string, print plaintext to stdout
   lock            Encrypt all plaintext values across all commands
   edit <name>     Decrypt secrets to $EDITOR, re-encrypt on save
   help            Show this help`)

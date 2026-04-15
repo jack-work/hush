@@ -12,7 +12,10 @@ import (
 	"github.com/jack-work/hush/version"
 )
 
+var flagCheck bool
+
 func init() {
+	statusCmd.Flags().BoolVar(&flagCheck, "check", false, "exit 0 if agent is running, 1 if not (no output)")
 	rootCmd.AddCommand(statusCmd)
 }
 
@@ -23,6 +26,18 @@ var statusCmd = &cobra.Command{
 }
 
 func runStatus(cmd *cobra.Command, args []string) error {
+	sockPath := filepath.Join(cfg.RuntimeDir, "agent.sock")
+	c := client.NewWithSocket(sockPath)
+
+	// --check mode: silent exit code only.
+	if flagCheck {
+		if c.Ping() == nil {
+			return nil
+		}
+		os.Exit(1)
+		return nil // unreachable
+	}
+
 	fmt.Printf("Version: %s\n\n", version.Version)
 	fmt.Println("Config:")
 	fmt.Printf("  config dir:   %s\n", cfg.ConfigDir)
@@ -66,8 +81,6 @@ func runStatus(cmd *cobra.Command, args []string) error {
 
 	// Agent.
 	fmt.Println()
-	sockPath := filepath.Join(cfg.RuntimeDir, "agent.sock")
-	c := client.NewWithSocket(sockPath)
 	ttl, err := c.Status()
 	if err == nil {
 		pidData, _ := os.ReadFile(filepath.Join(cfg.RuntimeDir, "agent.pid"))

@@ -52,6 +52,42 @@ func runtimeDir() (string, error) {
 	return d, nil
 }
 
+// Dirs holds explicit directory overrides. Any non-empty field takes
+// precedence over the XDG / env-based defaults. Used by the managed
+// package to point at an app-specific config root.
+type Dirs struct {
+	ConfigDir  string
+	StateDir   string
+	RuntimeDir string
+}
+
+// LoadWithDirs loads configuration using the supplied directory overrides.
+// Empty fields in dirs fall back to the normal XDG resolution.
+func LoadWithDirs(dirs Dirs) (*Config, error) {
+	cfgDir := dirs.ConfigDir
+	sDir := dirs.StateDir
+	rDir := dirs.RuntimeDir
+
+	var err error
+	if cfgDir == "" {
+		if cfgDir, err = configDir(); err != nil {
+			return nil, err
+		}
+	}
+	if sDir == "" {
+		if sDir, err = stateDir(); err != nil {
+			return nil, err
+		}
+	}
+	if rDir == "" {
+		if rDir, err = runtimeDir(); err != nil {
+			return nil, err
+		}
+	}
+
+	return loadFromDirs(cfgDir, sDir, rDir)
+}
+
 // Load reads config with priority: flags (caller sets via viper) > env > file > defaults.
 func Load() (*Config, error) {
 	cfgDir, err := configDir()
@@ -67,6 +103,10 @@ func Load() (*Config, error) {
 		return nil, err
 	}
 
+	return loadFromDirs(cfgDir, sDir, rDir)
+}
+
+func loadFromDirs(cfgDir, sDir, rDir string) (*Config, error) {
 	viper.SetDefault("ttl", "30m")
 	viper.SetDefault("identity", filepath.Join(cfgDir, "identity.age"))
 

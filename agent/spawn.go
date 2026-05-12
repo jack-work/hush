@@ -72,7 +72,7 @@ func SpawnDaemon(exe string, args []string, env []string, id *identity.Decrypted
 //
 // This is intended to be called from the consuming application's main()
 // when it detects SpawnEnvVar is set.
-func RunChildFromPipe(ttl time.Duration, runtimeDir string, logger *log.Logger) error {
+func RunChildFromPipe(ttl time.Duration, runtimeDir, stateDir string, logger *log.Logger) error {
 	pipe := os.NewFile(3, "identity-pipe")
 	if pipe == nil {
 		return fmt.Errorf("identity pipe (fd 3) not available")
@@ -89,7 +89,7 @@ func RunChildFromPipe(ttl time.Duration, runtimeDir string, logger *log.Logger) 
 		return fmt.Errorf("parse identity from pipe: %w", err)
 	}
 
-	ag := New(id, ttl, runtimeDir, logger)
+	ag := New(id, ttl, runtimeDir, stateDir, logger)
 	return ag.Run()
 }
 

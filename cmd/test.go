@@ -136,7 +136,8 @@ func runTest(cmd *cobra.Command, args []string) error {
 	runtimeDir := filepath.Join(dir, "runtime")
 	logger := log.New(io.Discard, "", 0)
 
-	ag := agent.New(id, 30*time.Second, runtimeDir, logger)
+	stateDir := filepath.Join(dir, "state")
+	ag := agent.New(id, 30*time.Second, runtimeDir, stateDir, logger)
 	agentDone := make(chan error, 1)
 	go func() { agentDone <- ag.Run() }()
 

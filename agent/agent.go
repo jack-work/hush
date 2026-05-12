@@ -2,6 +2,7 @@ package agent
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -16,6 +17,7 @@ import (
 
 	"filippo.io/age"
 	"github.com/jack-work/hush/identity"
+	"github.com/jack-work/hush/oauth"
 	"github.com/jack-work/hush/secrets"
 	"github.com/jack-work/hush/version"
 )
@@ -27,17 +29,27 @@ type Agent struct {
 	ttl        time.Duration
 	deadline   time.Time
 	runtimeDir string
+	stateDir   string
+	oauth      *oauth.Manager
 	log        *log.Logger
 }
 
-// New creates an agent from an already-decrypted identity.
-func New(id *identity.DecryptedIdentity, ttl time.Duration, runtimeDir string, logger *log.Logger) *Agent {
-	return &Agent{
+// New creates an agent from an already-decrypted identity. stateDir is used
+// for persistent state owned by the agent (currently: OAuth credentials).
+func New(id *identity.DecryptedIdentity, ttl time.Duration, runtimeDir, stateDir string, logger *log.Logger) *Agent {
+	a := &Agent{
 		id:         id,
 		ttl:        ttl,
 		runtimeDir: runtimeDir,
+		stateDir:   stateDir,
 		log:        logger,
 	}
+	if rec := firstX25519Recipient(id.Identities); rec != nil {
+		a.oauth = oauth.NewManager(stateDir, id.Identities, rec, logger)
+	} else {
+		logger.Printf("warning: no X25519 identity available; OAuth credential management disabled")
+	}
+	return a
 }
 
 // Run starts the agent: writes PID file, listens on the socket, and blocks
@@ -55,6 +67,12 @@ func (a *Agent) Run() error {
 
 	if err := a.writePID(); err != nil {
 		return err
+	}
+
+	if a.oauth != nil {
+		if err := a.oauth.Start(); err != nil {
+			a.log.Printf("oauth: start failed: %v", err)
+		}
 	}
 
 	sockPath := a.sockPath()
@@ -123,6 +141,16 @@ func (a *Agent) handleConn(conn net.Conn) {
 		resp = a.handleStatus()
 	case "version":
 		resp = a.handleVersion()
+	case "oauth_register":
+		resp = a.handleOAuthRegister(req)
+	case "oauth_get":
+		resp = a.handleOAuthGet(req)
+	case "oauth_refresh":
+		resp = a.handleOAuthRefresh(req)
+	case "oauth_delete":
+		resp = a.handleOAuthDelete(req)
+	case "oauth_list":
+		resp = a.handleOAuthList()
 	default:
 		resp = errResponse(fmt.Sprintf("unknown op: %q", req.Op))
 	}
@@ -169,14 +197,109 @@ func (a *Agent) handleEncrypt(req Request) []byte {
 	return okResponse(Response{Values: out})
 }
 
+func (a *Agent) handleOAuthRegister(req Request) []byte {
+	if a.oauth == nil {
+		return errResponse("oauth: no X25519 identity available")
+	}
+	if req.OAuth == nil {
+		return errResponseCoded("oauth: missing oauth payload", ErrCodeOAuthBadRequest)
+	}
+	o := req.OAuth
+	err := a.oauth.Register(oauth.Config{
+		Name:         o.Name,
+		AuthorizeURL: o.AuthorizeURL,
+		TokenURL:     o.TokenURL,
+		RedirectURI:  o.RedirectURI,
+		ClientID:     o.ClientID,
+		Scopes:       o.Scopes,
+	}, oauth.Tokens{
+		AccessToken:  o.AccessToken,
+		RefreshToken: o.RefreshToken,
+		ExpiresIn:    o.ExpiresIn,
+	})
+	if err != nil {
+		return errResponseCoded(err.Error(), ErrCodeOAuthBadRequest)
+	}
+	return okResponse(Response{})
+}
+
+func (a *Agent) handleOAuthGet(req Request) []byte {
+	if a.oauth == nil {
+		return errResponse("oauth: no X25519 identity available")
+	}
+	if req.OAuth == nil || req.OAuth.Name == "" {
+		return errResponseCoded("oauth: name required", ErrCodeOAuthBadRequest)
+	}
+	tok, err := a.oauth.Get(req.OAuth.Name)
+	if err != nil {
+		return errResponseCoded(err.Error(), oauthErrCode(err))
+	}
+	return okResponse(Response{Token: tok})
+}
+
+func (a *Agent) handleOAuthRefresh(req Request) []byte {
+	if a.oauth == nil {
+		return errResponse("oauth: no X25519 identity available")
+	}
+	if req.OAuth == nil || req.OAuth.Name == "" {
+		return errResponseCoded("oauth: name required", ErrCodeOAuthBadRequest)
+	}
+	tok, err := a.oauth.Refresh(req.OAuth.Name)
+	if err != nil {
+		return errResponseCoded(err.Error(), oauthErrCode(err))
+	}
+	return okResponse(Response{Token: tok})
+}
+
+func (a *Agent) handleOAuthDelete(req Request) []byte {
+	if a.oauth == nil {
+		return errResponse("oauth: no X25519 identity available")
+	}
+	if req.OAuth == nil || req.OAuth.Name == "" {
+		return errResponseCoded("oauth: name required", ErrCodeOAuthBadRequest)
+	}
+	if err := a.oauth.Delete(req.OAuth.Name); err != nil {
+		return errResponse(err.Error())
+	}
+	return okResponse(Response{})
+}
+
+func (a *Agent) handleOAuthList() []byte {
+	if a.oauth == nil {
+		return errResponse("oauth: no X25519 identity available")
+	}
+	return okResponse(Response{Names: a.oauth.List()})
+}
+
+func oauthErrCode(err error) string {
+	switch {
+	case errors.Is(err, oauth.ErrNotFound):
+		return ErrCodeOAuthNotFound
+	case errors.Is(err, oauth.ErrRefreshPermanent):
+		return ErrCodeOAuthRefreshPermanent
+	case errors.Is(err, oauth.ErrRefreshTransient):
+		return ErrCodeOAuthRefreshTransient
+	default:
+		return ""
+	}
+}
+
 // recipient derives the public key from the first X25519 identity.
 func (a *Agent) recipient() (age.Recipient, error) {
-	for _, id := range a.id.Identities {
+	r := firstX25519Recipient(a.id.Identities)
+	if r == nil {
+		return nil, fmt.Errorf("no X25519 identity available for encryption")
+	}
+	return r, nil
+}
+
+func firstX25519Recipient(ids []age.Identity) age.Recipient {
+	for _, id := range ids {
 		if x, ok := id.(*age.X25519Identity); ok {
-			return x.Recipient(), nil
+			return x.Recipient()
 		}
 	}
-	return nil, fmt.Errorf("no X25519 identity available for encryption")
+	return nil
 }
 
 func (a *Agent) handleVersion() []byte {
@@ -192,6 +315,9 @@ func (a *Agent) handleStatus() []byte {
 }
 
 func (a *Agent) shutdown() {
+	if a.oauth != nil {
+		a.oauth.Stop()
+	}
 	a.log.Printf("zeroing identity")
 	a.id.Zero()
 

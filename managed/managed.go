@@ -141,7 +141,7 @@ func RunAgentChild() error {
 		}
 	}
 
-	return agent.RunChildFromPipe(cfg.TTL, cfg.RuntimeDir, logger)
+	return agent.RunChildFromPipe(cfg.TTL, cfg.RuntimeDir, cfg.StateDir, logger)
 }
 
 // New creates a managed hush instance. It probes for an external hush agent

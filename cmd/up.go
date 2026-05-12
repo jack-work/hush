@@ -69,7 +69,7 @@ func runUp(cmd *cobra.Command, args []string) error {
 	}
 	defer logFile.Close()
 
-	ag := agent.New(id, ttl, cfg.RuntimeDir, logger)
+	ag := agent.New(id, ttl, cfg.RuntimeDir, cfg.StateDir, logger)
 	return ag.Run()
 }
 
@@ -160,7 +160,7 @@ func runChild(ttl time.Duration) error {
 	}
 	defer logFile.Close()
 
-	ag := agent.New(id, ttl, cfg.RuntimeDir, logger)
+	ag := agent.New(id, ttl, cfg.RuntimeDir, cfg.StateDir, logger)
 	return ag.Run()
 }
 

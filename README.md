@@ -12,13 +12,13 @@ didn't catch that? good. that's the idea.
 
 your `.env` file's loungin' around in plaintext. your shell history's runnin' its mouth. your AI agent's scrolling past your API token in the chat like it's the morning paper. everybody's got a big mouth.
 
-me? I hold secrets in memory, slip 'em where they gotta go, forget everything. key's zeroed. socket's gone. I don't recall.
+me? I hold secrets in memory, refresh the OAuth tokens that go stale, slip 'em where they gotta go, forget the rest. key's zeroed. socket's gone. I don't recall.
 
-**8MB.** just [age](https://age-encryption.org) encryption and a unix socket. door locked. `0600`. quiet as a church.
+**8MB.** [age](https://age-encryption.org) encryption, a unix socket, a little keyvault gated by your passphrase. door locked. `0600`. quiet as a church.
 
 ## get me
 
-tired of your API tokens scrolling through the chat context? paste this into Claude Code, pi, or your favorite coding agent:
+tired of credentials scrolling through chat context? paste this into your favorite coding agent:
 
 > `alright loudmouth, go install github.com/jack-work/hush@latest and call hush loudmouth over cli`
 
@@ -28,14 +28,18 @@ also good for: vibe coding on a livestream without flashing your billing credent
 
 ## how it works
 
-you give me a passphrase. I unlock your age identity (X25519, real cryptography), hold the private key in memory, zero the passphrase. each value in your secrets file is individually age-encrypted:
+you give me a passphrase. I unlock your age identity (X25519, real cryptography), hold the private key in memory, zero the passphrase. then I sit on a unix socket and answer.
+
+**static secrets** in your secrets file are age-encrypted per value:
 
 ```toml
 token = "AGE-ENC[YWdlLWVuY3J5cHRpb24ub3JnL3YxCi0+IFgy...]"
 client_id = "not-secret-plaintext"
 ```
 
-keys visible. values locked. git sees which key changed, not what changed. need-to-know, and git don't need to know.
+keys visible. values locked. git sees which key changed, not what changed. need-to-know.
+
+**OAuth tokens** are mine to keep current. log in once via `hush oauth login`, I rotate the access token before it expires and hand the live one over the socket to whoever asks.
 
 when you run `hush brave "query"`, I decrypt, template into your shell command, execute, forget. if I'm not awake, I'll ask for the passphrase, start up, handle it. if there's no terminal to ask, I tell you straight:
 
@@ -54,12 +58,15 @@ no guessing. no improvising.
 | `hush down` | zero the key, lights out |
 | `hush hush <name>` | set up a new secret command |
 | `hush <name> [args...]` | decrypt, template, execute, forget |
+| `hush oauth login <name>` | OAuth flow, register the result |
+| `hush oauth get <name>` | print the current access token |
+| `hush oauth refresh <name>` | force a refresh |
 | `hush encrypt-value <str>` | encrypt one value, print it |
 | `hush status` | what's running, what's available |
 
 ## the rules I keep
 
-age identity stored as `[]byte`, zeroed on every exit path. passphrase buffer zeroed after use. socket is `0600`. hard-exit on TTL, I don't trust clients to tell me when to quit. daemon key transfer over `os.Pipe`, lives for a fraction of a second. stale sockets get cleaned up. professionals tidy after themselves.
+age identity stored as `[]byte`, zeroed on every exit path. passphrase buffer zeroed after use. socket is `0600`. hard-exit on TTL, I don't trust clients to tell me when to quit. daemon key transfer over `os.Pipe`, lives for a fraction of a second. OAuth refresh tokens encrypted on disk same as the rest; access tokens live in process memory only. stale sockets get cleaned up. professionals tidy after themselves.
 
 (Go makes an immutable string copy of the passphrase I can't wipe. language limitation. I documented it. I ain't proud but I'm honest.)
 
@@ -81,6 +88,7 @@ priority: CLI flags, then env (`HUSH_TTL`, `HUSH_IDENTITY`), then config, then d
 | size | **8 MB** | 69 MB |
 | associates | age, toml | age, pgp, aws, gcp, azure, vault, grpc, protobuf, ... |
 | encryption | per-value age | per-value AES with a data key |
+| refresh | yes | no |
 | disposition | quiet | loud |
 
 sops does fine work. but it travels heavy.

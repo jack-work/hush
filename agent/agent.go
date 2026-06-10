@@ -32,6 +32,10 @@ type Agent struct {
 	stateDir   string
 	oauth      *oauth.Manager
 	log        *log.Logger
+
+	// lockFile holds the single-instance flock for the agent's lifetime.
+	// Non-nil iff this process owns the runtime directory's files.
+	lockFile *os.File
 }
 
 // New creates an agent from an already-decrypted identity. stateDir is used
@@ -52,8 +56,9 @@ func New(id *identity.DecryptedIdentity, ttl time.Duration, runtimeDir, stateDir
 	return a
 }
 
-// Run starts the agent: writes PID file, listens on the socket, and blocks
-// until TTL expires or a signal is received. The identity is zeroed on exit.
+// Run starts the agent: takes the single-instance lock, listens on the
+// socket, and blocks until TTL expires or a signal is received. The
+// identity is zeroed on exit.
 func (a *Agent) Run() error {
 	defer a.shutdown()
 
@@ -61,13 +66,13 @@ func (a *Agent) Run() error {
 		return fmt.Errorf("create runtime dir: %w", err)
 	}
 
-	if err := a.checkStale(); err != nil {
+	if err := a.acquireLock(); err != nil {
 		return err
 	}
 
-	if err := a.writePID(); err != nil {
-		return err
-	}
+	// We hold the lock, so no other agent is alive: any leftover socket
+	// is stale (e.g. a SIGKILL'd predecessor) and safe to replace.
+	os.Remove(a.sockPath())
 
 	if a.oauth != nil {
 		if err := a.oauth.Start(); err != nil {
@@ -321,8 +326,15 @@ func (a *Agent) shutdown() {
 	a.log.Printf("zeroing identity")
 	a.id.Zero()
 
-	os.Remove(a.sockPath())
-	os.Remove(a.pidPath())
+	// Only the lock holder owns the runtime files. A Run that failed to
+	// acquire the lock must not touch the live agent's socket.
+	if a.lockFile != nil {
+		os.Remove(a.sockPath())
+		// Release the lock last; the PID file itself stays in place —
+		// it is the lock inode (see acquireLock).
+		a.lockFile.Close()
+		a.lockFile = nil
+	}
 	a.log.Printf("agent stopped")
 }
 
@@ -334,52 +346,41 @@ func (a *Agent) pidPath() string {
 	return filepath.Join(a.runtimeDir, "agent.pid")
 }
 
-func (a *Agent) writePID() error {
-	return os.WriteFile(a.pidPath(), []byte(strconv.Itoa(os.Getpid())), 0600)
-}
-
-// checkStale detects whether an agent is already running. If a stale socket
-// or PID file exists, it cleans them up. If a live agent is found, returns
-// an error so the caller can exit.
-func (a *Agent) checkStale() error {
-	sockPath := a.sockPath()
-
-	// Try connecting to existing socket.
-	if conn, err := net.DialTimeout("unix", sockPath, time.Second); err == nil {
-		conn.Close()
-		return fmt.Errorf("agent already running (socket %s responds)", sockPath)
-	}
-
-	// Socket exists but nobody's home — remove it.
-	os.Remove(sockPath)
-
-	// Check PID file.
-	pidPath := a.pidPath()
-	data, err := os.ReadFile(pidPath)
+// acquireLock takes the single-instance lock: an exclusive flock(2) on the
+// PID file, held for the agent's lifetime. Acquiring the lock *is* the
+// claim — there is no window between checking for a live agent and
+// becoming one. The kernel releases the lock when the process exits,
+// however it exits, so there is no stale state to detect or clean up.
+//
+// The PID file is never unlinked, by anyone: flock attaches to the inode,
+// so removing the file would let a second agent lock a fresh inode at the
+// same path while the first still holds the old one. Its content (our pid)
+// is informational, for `hush down` and humans.
+func (a *Agent) acquireLock() error {
+	f, err := os.OpenFile(a.pidPath(), os.O_CREATE|os.O_RDWR, 0600)
 	if err != nil {
-		return nil // no PID file, all clear
+		return fmt.Errorf("open lock file: %w", err)
 	}
-
-	pid, err := strconv.Atoi(strings.TrimSpace(string(data)))
-	if err != nil {
-		os.Remove(pidPath)
-		return nil
+	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		data, _ := io.ReadAll(f)
+		f.Close()
+		holder := strings.TrimSpace(string(data))
+		if holder == "" {
+			holder = "unknown pid"
+		} else {
+			holder = "pid " + holder
+		}
+		return fmt.Errorf("agent already running (%s holds %s)", holder, a.pidPath())
 	}
-
-	proc, err := os.FindProcess(pid)
-	if err != nil {
-		os.Remove(pidPath)
-		return nil
+	if err := f.Truncate(0); err != nil {
+		f.Close()
+		return fmt.Errorf("truncate lock file: %w", err)
 	}
-
-	// Signal 0 checks if process exists without actually signaling it.
-	if err := proc.Signal(syscall.Signal(0)); err == nil {
-		return fmt.Errorf("agent already running (pid %d)", pid)
+	if _, err := f.WriteAt([]byte(strconv.Itoa(os.Getpid())), 0); err != nil {
+		f.Close()
+		return fmt.Errorf("write pid: %w", err)
 	}
-
-	// Stale PID file — remove it.
-	a.log.Printf("removing stale pid file (pid %d)", pid)
-	os.Remove(pidPath)
+	a.lockFile = f
 	return nil
 }
 

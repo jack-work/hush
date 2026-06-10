@@ -357,10 +357,18 @@ func runTest(cmd *cobra.Command, args []string) error {
 	if _, err := os.Stat(sockPath); err == nil {
 		return fmt.Errorf("socket file not cleaned up")
 	}
-	if _, err := os.Stat(pidFile); err == nil {
-		return fmt.Errorf("pid file not cleaned up")
+	// The PID file persists by design — it is the single-instance lock
+	// inode — but the lock itself must be free after shutdown.
+	lf, err := os.Open(pidFile)
+	if err != nil {
+		return fmt.Errorf("lock file missing after shutdown: %w", err)
 	}
-	fmt.Println("  Socket and PID files cleaned up")
+	defer lf.Close()
+	if err := syscall.Flock(int(lf.Fd()), syscall.LOCK_SH|syscall.LOCK_NB); err != nil {
+		return fmt.Errorf("single-instance lock still held after shutdown")
+	}
+	syscall.Flock(int(lf.Fd()), syscall.LOCK_UN)
+	fmt.Println("  Socket removed, single-instance lock released")
 
 	fmt.Println("\n✓ All tests passed")
 	return nil

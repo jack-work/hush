@@ -2,6 +2,7 @@ package oauth
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -47,6 +48,16 @@ func (m *Manager) doRefresh(st *configState) (string, error) {
 			err = fmt.Errorf("oauth: persist refreshed tokens: %w", perr)
 		} else {
 			st.tokens.Store(&newTok)
+		}
+	} else if errors.Is(err, ErrRefreshPermanent) {
+		// A permanent rejection usually means our refresh token was
+		// rotated away by another process whose success is already on
+		// disk. Adopt the newer disk state instead of failing.
+		if disk, ok := m.newerOnDisk(st); ok {
+			m.logger.Printf("oauth: %s refresh rejected; adopting newer tokens from disk (rotated by another process)", st.cfg.Name)
+			st.tokens.Store(&disk)
+			tok = Tokens{AccessToken: disk.access}
+			err = nil
 		}
 	}
 
@@ -120,4 +131,20 @@ func (m *Manager) refreshHTTP(st *configState) (Tokens, error) {
 		RefreshToken: parsed.RefreshToken,
 		ExpiresIn:    parsed.ExpiresIn,
 	}, nil
+}
+
+// newerOnDisk loads the persisted tokens for st and reports whether they
+// differ from the in-memory ones. A difference means another process
+// refreshed successfully after we loaded ours, so its rotated tokens
+// supersede our rejected ones.
+func (m *Manager) newerOnDisk(st *configState) (plaintextTokens, bool) {
+	_, tok, err := m.loadFile(m.filePath(st.cfg.Name))
+	if err != nil {
+		return plaintextTokens{}, false
+	}
+	cur := st.tokens.Load()
+	if cur != nil && tok.access == cur.access && tok.refresh == cur.refresh {
+		return plaintextTokens{}, false
+	}
+	return tok, true
 }

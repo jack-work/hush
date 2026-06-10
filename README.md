@@ -68,6 +68,8 @@ no guessing. no improvising.
 
 age identity stored as `[]byte`, zeroed on every exit path. passphrase buffer zeroed after use. socket is `0600`. hard-exit on TTL, I don't trust clients to tell me when to quit. daemon key transfer over `os.Pipe`, lives for a fraction of a second. OAuth refresh tokens encrypted on disk same as the rest; access tokens live in process memory only. stale sockets get cleaned up. professionals tidy after themselves.
 
+one of me at a time: exclusive `flock` on `agent.pid`, held for life, kernel lets go when I do. the pid file stays put — it's the lock, not litter. if my refresh token gets rotated out from under me, I take the newer one off disk and move on.
+
 (Go makes an immutable string copy of the passphrase I can't wipe. language limitation. I documented it. I ain't proud but I'm honest.)
 
 ## config

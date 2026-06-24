@@ -19,7 +19,20 @@ type Config struct {
 	RuntimeDir   string
 }
 
+// Directory resolution honors, in priority order:
+//
+//  1. HUSH_CONFIG_DIR / HUSH_STATE_DIR / HUSH_RUNTIME_DIR — explicit
+//     hush-scoped overrides used as-is (no "/hush" suffix appended).
+//     These exist so dev shells and embedded callers can pin every
+//     singleton without colliding with the user's session-level
+//     XDG_RUNTIME_DIR, which is normally always set.
+//  2. XDG_CONFIG_HOME / XDG_STATE_HOME / XDG_RUNTIME_DIR — standard
+//     XDG dirs; "/hush" is appended.
+//  3. Hard-coded defaults under $HOME (or os.TempDir for runtime).
 func configDir() (string, error) {
+	if d := os.Getenv("HUSH_CONFIG_DIR"); d != "" {
+		return d, nil
+	}
 	if d := os.Getenv("XDG_CONFIG_HOME"); d != "" {
 		return filepath.Join(d, "hush"), nil
 	}
@@ -31,6 +44,9 @@ func configDir() (string, error) {
 }
 
 func stateDir() (string, error) {
+	if d := os.Getenv("HUSH_STATE_DIR"); d != "" {
+		return d, nil
+	}
 	if d := os.Getenv("XDG_STATE_HOME"); d != "" {
 		return filepath.Join(d, "hush"), nil
 	}
@@ -42,6 +58,9 @@ func stateDir() (string, error) {
 }
 
 func runtimeDir() (string, error) {
+	if d := os.Getenv("HUSH_RUNTIME_DIR"); d != "" {
+		return d, nil
+	}
 	if d := os.Getenv("XDG_RUNTIME_DIR"); d != "" {
 		return filepath.Join(d, "hush"), nil
 	}

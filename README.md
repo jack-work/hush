@@ -83,6 +83,13 @@ identity = "/custom/path/to/identity.age"
 
 priority: CLI flags, then env (`HUSH_TTL`, `HUSH_IDENTITY`), then config, then defaults (30m). your word is final.
 
+**directories** also come from env when set, in priority order:
+`HUSH_CONFIG_DIR` / `HUSH_STATE_DIR` / `HUSH_RUNTIME_DIR` (hush-scoped,
+used as-is), then `XDG_CONFIG_HOME` / `XDG_STATE_HOME` / `XDG_RUNTIME_DIR`
+(append `/hush`), then the standard XDG defaults under `$HOME`. The
+`HUSH_*` overrides exist so dev shells and embedded callers can pin every
+singleton without colliding with the user's session-level XDG vars.
+
 ## compared to that other fella
 
 | | hush | sops |

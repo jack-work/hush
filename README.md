@@ -58,6 +58,7 @@ no guessing. no improvising.
 | `hush down` | zero the key, lights out |
 | `hush hush <name>` | set up a new secret command |
 | `hush <name> [args...]` | decrypt, template, execute, forget |
+| `hush keyring {set,get,clear}` | manage the OS-keyring entry for the unlock backend |
 | `hush oauth login <name>` | OAuth flow, register the result |
 | `hush oauth get <name>` | print the current access token |
 | `hush oauth refresh <name>` | force a refresh |
@@ -89,6 +90,57 @@ used as-is), then `XDG_CONFIG_HOME` / `XDG_STATE_HOME` / `XDG_RUNTIME_DIR`
 (append `/hush`), then the standard XDG defaults under `$HOME`. The
 `HUSH_*` overrides exist so dev shells and embedded callers can pin every
 singleton without colliding with the user's session-level XDG vars.
+
+## unlock — passphrase, keyring, exec
+
+the agent decrypts the on-disk identity at startup. how it gets the
+passphrase is up to you:
+
+```toml
+[unlock]
+method = "passphrase"   # default — TTY prompt (today's behavior)
+```
+
+```toml
+[unlock]
+method = "keyring"      # OS keyring: libsecret / Keychain / wincred
+
+[unlock.keyring]
+service = "hush"
+account = "default"
+```
+
+```toml
+[unlock]
+method = "exec"         # any password manager via its CLI
+exec   = ["pass", "show", "hush/passphrase"]
+# exec = ["op",   "read", "op://Personal/Hush/passphrase"]
+# exec = ["rbw",  "get",  "hush"]
+```
+
+seeding the keyring is a one-liner:
+
+```
+hush keyring set       # double-prompts, stores, wipes
+hush keyring get       # ✓ present / ✗ not set (never prints the value)
+hush keyring clear     # delete the entry
+```
+
+put it together with a long ttl and you type your passphrase once per
+desktop session (or once per machine, if your keyring outlives reboots):
+
+```toml
+ttl = "168h"
+
+[unlock]
+method = "keyring"
+```
+
+headless machine without a Secret Service provider? use `method = "exec"`
+with `pass` or `rbw` — no dbus dependency.
+
+`hush status` prints the active method so you always know which mouth
+is whispering the passphrase.
 
 ## compared to that other fella
 

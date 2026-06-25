@@ -9,6 +9,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/jack-work/hush/client"
+	"github.com/jack-work/hush/config"
 	"github.com/jack-work/hush/version"
 )
 
@@ -46,6 +47,7 @@ func runStatus(cmd *cobra.Command, args []string) error {
 	fmt.Printf("  runtime dir:  %s\n", cfg.RuntimeDir)
 	fmt.Printf("  state dir:    %s\n", cfg.StateDir)
 	fmt.Printf("  default ttl:  %s\n", cfg.TTL)
+	fmt.Printf("  unlock:       %s\n", describeUnlock(cfg.Unlock))
 
 	// Identity.
 	if _, err := os.Stat(cfg.IdentityFile); err == nil {
@@ -109,4 +111,29 @@ func listCommands() []string {
 		}
 	}
 	return names
+}
+
+// describeUnlock renders the active unlock method as a one-liner for
+// the status output. We deliberately avoid printing anything that could
+// double as a secret — keyring service/account are fine (they're
+// identifiers, not values); exec argv is fine (it's argv, not stdout).
+func describeUnlock(u config.UnlockConfig) string {
+	method := u.Method
+	if method == "" {
+		method = "passphrase"
+	}
+	switch method {
+	case "passphrase":
+		return "passphrase (TTY prompt)"
+	case "keyring":
+		return fmt.Sprintf("keyring (service=%q account=%q)",
+			u.Keyring.Service, u.Keyring.Account)
+	case "exec":
+		if len(u.Exec) == 0 {
+			return "exec (argv not set — misconfigured)"
+		}
+		return fmt.Sprintf("exec %v", u.Exec)
+	default:
+		return fmt.Sprintf("%s (unknown method)", method)
+	}
 }

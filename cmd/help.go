@@ -36,6 +36,8 @@ Built-in commands:
   decrypt-value   Decrypt a single AGE-ENC[...] string, print plaintext to stdout
   lock            Encrypt all plaintext values across all commands
   edit <name>     Decrypt secrets to $EDITOR, re-encrypt on save
+  oauth           Manage OAuth credentials refreshed by the agent
+  keyring         Manage the hush passphrase in the OS keyring
   help            Show this help`)
 
 	commands := listCommands()

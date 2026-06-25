@@ -6,7 +6,6 @@ import (
 	"path/filepath"
 
 	"filippo.io/age"
-	"golang.org/x/term"
 
 	"github.com/jack-work/hush/identity"
 	"github.com/jack-work/hush/config"
@@ -56,17 +55,3 @@ func initIdentity(cfg *config.Config, passphrase []byte) (string, error) {
 	return pubkey, nil
 }
 
-// promptPassphrase reads a passphrase from the terminal with the given prompt.
-// Returns an error if stdin is not a terminal.
-func promptPassphrase(prompt string) ([]byte, error) {
-	if !term.IsTerminal(int(os.Stdin.Fd())) {
-		return nil, fmt.Errorf("no interactive terminal available for passphrase input")
-	}
-	fmt.Fprint(os.Stderr, prompt)
-	p, err := term.ReadPassword(int(os.Stdin.Fd()))
-	fmt.Fprintln(os.Stderr)
-	if err != nil {
-		return nil, fmt.Errorf("read passphrase: %w", err)
-	}
-	return p, nil
-}

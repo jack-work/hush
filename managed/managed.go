@@ -32,6 +32,7 @@
 package managed
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"os"
@@ -43,6 +44,7 @@ import (
 	"github.com/jack-work/hush/client"
 	"github.com/jack-work/hush/config"
 	"github.com/jack-work/hush/identity"
+	"github.com/jack-work/hush/unlock"
 )
 
 // Options configures a managed hush instance.
@@ -353,13 +355,22 @@ func (h *Hush) startEmbedded() error {
 			h.cfg.IdentityFile)
 	}
 
-	// Prompt for passphrase.
-	passphrase, err := promptPassphrase("Enter passphrase for " + h.opts.AppName + " secrets: ")
+	// Resolve the passphrase via the configured unlock method. With no
+	// [unlock] table set, this defaults to "passphrase" — the TTY
+	// prompt path — preserving today's UX.
+	u, err := unlock.New(h.cfg.Unlock)
 	if err != nil {
 		return err
 	}
+	passphrase, err := u.Passphrase(context.Background())
+	if err != nil {
+		return fmt.Errorf("unlock %s: %w", h.opts.AppName, err)
+	}
 
 	id, err := identity.Unlock(h.cfg.IdentityFile, passphrase)
+	for i := range passphrase {
+		passphrase[i] = 0
+	}
 	if err != nil {
 		return fmt.Errorf("unlock identity: %w", err)
 	}

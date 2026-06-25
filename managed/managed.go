@@ -40,6 +40,10 @@ import (
 	"path/filepath"
 	"time"
 
+	"golang.org/x/term"
+
+	"github.com/zalando/go-keyring"
+
 	"github.com/jack-work/hush/agent"
 	"github.com/jack-work/hush/client"
 	"github.com/jack-work/hush/config"
@@ -52,6 +56,18 @@ type Options struct {
 	// AppName is used to namespace the embedded config directory
 	// (e.g. ~/.config/<AppName>/hush/). Required.
 	AppName string
+
+	// Mode selects the backend. Zero value (ModeUnspecified) means
+	// "managed picks the default", which is currently ModeEmbedded —
+	// the consuming binary re-execs itself as the agent. Set
+	// ModeExternal explicitly to opt into using a system-installed
+	// `hush` daemon (shared across consumers).
+	//
+	// We default to embedded because it's the friction-free install
+	// story: `go install <consumer>` and it works, no separate hush
+	// install, no "my keys disappeared when I installed hush later"
+	// surprise from auto-detection pivoting modes underfoot.
+	Mode Mode
 
 	// Dirs overrides the default directory resolution. If set, these take
 	// precedence over both external hush defaults and the AppName-derived
@@ -88,14 +104,22 @@ type Hush struct {
 type Mode int
 
 const (
-	// ModeExternal means the system-installed hush agent is being used.
-	ModeExternal Mode = iota
-	// ModeEmbedded means this application is managing its own hush agent.
+	// ModeUnspecified is the zero value; treated as ModeEmbedded in New.
+	ModeUnspecified Mode = iota
+	// ModeEmbedded means this application is managing its own hush agent
+	// by re-execing itself. This is the default — zero install friction,
+	// per-consumer identity, no surprises.
 	ModeEmbedded
+	// ModeExternal means an existing system-installed hush agent is being
+	// used. Opt-in for power users who want to share secrets across
+	// consumers.
+	ModeExternal
 )
 
 func (m Mode) String() string {
 	switch m {
+	case ModeUnspecified:
+		return "unspecified"
 	case ModeExternal:
 		return "external"
 	case ModeEmbedded:
@@ -146,11 +170,18 @@ func RunAgentChild() error {
 	return agent.RunChildFromPipe(cfg.TTL, cfg.RuntimeDir, cfg.StateDir, logger)
 }
 
-// New creates a managed hush instance. It probes for an external hush agent
-// first; if none is found, it prepares to manage an embedded one.
+// New creates a managed hush instance. Behavior depends on Options.Mode:
 //
-// New does NOT start the agent or prompt for a passphrase. Call EnsureReady()
-// or one of the Decrypt/Encrypt methods to trigger that lazily.
+//   - ModeUnspecified (default) or ModeEmbedded: prepares to manage an
+//     embedded agent (the consumer's own binary, re-exec'd). The agent
+//     isn't started until EnsureReady or a Decrypt call.
+//   - ModeExternal: requires a system-installed hush agent or `hush`
+//     binary on PATH. Returns an error if neither is found — explicit,
+//     so the consumer learns at startup rather than at first secret
+//     fetch.
+//
+// New does NOT prompt for a passphrase. Call EnsureReady() to trigger
+// that lazily.
 func New(opts Options) (*Hush, error) {
 	if opts.AppName == "" {
 		return nil, fmt.Errorf("managed.Options.AppName is required")
@@ -158,24 +189,32 @@ func New(opts Options) (*Hush, error) {
 
 	h := &Hush{opts: opts}
 
-	// 1. Try external hush agent (default XDG socket).
-	if h.tryExternal() {
-		return h, nil
+	mode := opts.Mode
+	if mode == ModeUnspecified {
+		mode = ModeEmbedded
 	}
 
-	// 2. Try external hush CLI on PATH — it might just need starting.
-	if _, err := exec.LookPath("hush"); err == nil {
-		if h.tryExternalCLI() {
+	switch mode {
+	case ModeExternal:
+		if h.tryExternal() {
 			return h, nil
 		}
-	}
+		if _, err := exec.LookPath("hush"); err == nil {
+			if h.tryExternalCLI() {
+				return h, nil
+			}
+		}
+		return nil, fmt.Errorf("managed: Options.Mode = External but no live hush agent or `hush` binary found on PATH")
 
-	// 3. Fall back to embedded mode.
-	if err := h.setupEmbedded(); err != nil {
-		return nil, err
-	}
+	case ModeEmbedded:
+		if err := h.setupEmbedded(); err != nil {
+			return nil, err
+		}
+		return h, nil
 
-	return h, nil
+	default:
+		return nil, fmt.Errorf("managed: unknown Mode %v", mode)
+	}
 }
 
 // Mode returns whether this instance is using external or embedded hush.
@@ -221,6 +260,10 @@ func (h *Hush) EnsureReady() error {
 
 // Init generates a new hush identity in the managed config directory.
 // Only meaningful in embedded mode. Returns the public key string.
+//
+// The passphrase buffer is the caller's; this method does not wipe it.
+// Callers that want to discard the passphrase immediately should
+// `defer wipe(passphrase)`.
 func (h *Hush) Init(passphrase []byte) (publicKey string, err error) {
 	if h.mode == ModeExternal {
 		return "", fmt.Errorf("init not supported in external mode — use 'hush init' directly")
@@ -305,6 +348,14 @@ func (h *Hush) setupEmbedded() error {
 		cfg.TTL = h.opts.TTL
 	}
 
+	// In embedded mode, each consumer has its own identity and its own
+	// keyring entry. If the user hasn't customized the keyring service,
+	// scope it to the AppName so figaro's keyring entry doesn't trample
+	// gws's (and vice versa). User-supplied non-default values win.
+	if cfg.Unlock.Keyring.Service == "" || cfg.Unlock.Keyring.Service == "hush" {
+		cfg.Unlock.Keyring.Service = h.opts.AppName
+	}
+
 	sockPath := filepath.Join(cfg.RuntimeDir, "agent.sock")
 	h.cfg = cfg
 	h.client = client.NewWithSocket(sockPath)
@@ -349,22 +400,28 @@ func (h *Hush) startExternal() error {
 }
 
 func (h *Hush) startEmbedded() error {
-	if !h.HasIdentity() {
-		return fmt.Errorf("no hush identity found at %s.\n\n"+
-			"Run your application's init/setup command to create one, or call Init() programmatically.",
-			h.cfg.IdentityFile)
-	}
+	var passphrase []byte
+	var err error
 
-	// Resolve the passphrase via the configured unlock method. With no
-	// [unlock] table set, this defaults to "passphrase" — the TTY
-	// prompt path — preserving today's UX.
-	u, err := unlock.New(h.cfg.Unlock)
-	if err != nil {
-		return err
-	}
-	passphrase, err := u.Passphrase(context.Background())
-	if err != nil {
-		return fmt.Errorf("unlock %s: %w", h.opts.AppName, err)
+	if !h.HasIdentity() {
+		// First run: prompt twice, init identity, persist to keyring
+		// where appropriate. Returns the (still-live) passphrase bytes
+		// so we can use them directly to unlock the just-written
+		// identity — no second prompt.
+		passphrase, err = h.bootstrapNewIdentity()
+		if err != nil {
+			return err
+		}
+	} else {
+		// Returning user: resolve via the configured unlock backend.
+		u, uerr := unlock.New(h.cfg.Unlock)
+		if uerr != nil {
+			return uerr
+		}
+		passphrase, err = u.Passphrase(context.Background())
+		if err != nil {
+			return fmt.Errorf("unlock %s: %w", h.opts.AppName, err)
+		}
 	}
 
 	id, err := identity.Unlock(h.cfg.IdentityFile, passphrase)
@@ -403,4 +460,99 @@ func (h *Hush) startEmbedded() error {
 	}
 
 	return nil
+}
+
+// bootstrapNewIdentity runs the first-run identity creation flow:
+// prompts the user for a passphrase (twice, confirming match), writes
+// the encrypted age identity to disk, and \u2014 when the configured
+// unlock method is keyring-aware \u2014 persists the passphrase to the OS
+// keyring so subsequent startups are silent.
+//
+// Returns the (still-live) passphrase bytes so the caller can use them
+// to unlock the identity immediately without a second prompt. The
+// caller owns the buffer and is responsible for wiping it.
+func (h *Hush) bootstrapNewIdentity() ([]byte, error) {
+	if !term.IsTerminal(int(os.Stdin.Fd())) {
+		return nil, fmt.Errorf(
+			"first-time setup for %q needs a controlling terminal, but stdin is not a TTY. " +
+				"Run your application interactively once to set the passphrase, " +
+				"or pre-initialize via your application's setup command.",
+			h.opts.AppName)
+	}
+
+	fmt.Fprintf(os.Stderr, "\n[hush] First-time setup for %q.\n", h.opts.AppName)
+	fmt.Fprintln(os.Stderr, "[hush] Choose a passphrase to encrypt your secrets at rest.")
+	fmt.Fprintln(os.Stderr, "[hush] You'll only be asked once \u2014 we'll save it to your OS keyring.")
+	fmt.Fprintln(os.Stderr)
+
+	pp1, err := promptOnce("Passphrase: ")
+	if err != nil {
+		return nil, err
+	}
+	if len(pp1) == 0 {
+		return nil, fmt.Errorf("passphrase cannot be empty")
+	}
+	pp2, err := promptOnce("Confirm:    ")
+	if err != nil {
+		wipe(pp1)
+		return nil, err
+	}
+	if !bytesEqual(pp1, pp2) {
+		wipe(pp1)
+		wipe(pp2)
+		return nil, fmt.Errorf("passphrases do not match")
+	}
+	wipe(pp2)
+
+	pub, err := initIdentity(h.cfg, pp1)
+	if err != nil {
+		wipe(pp1)
+		return nil, fmt.Errorf("init identity: %w", err)
+	}
+	fmt.Fprintf(os.Stderr, "[hush] \u2713 identity created (public key %s)\n", pub)
+
+	// Persist to the keyring if the configured method would read from
+	// it. This is the bridge that makes the next startup silent.
+	method := h.cfg.Unlock.Method
+	if method == "" || method == "auto" || method == "keyring" {
+		svc := h.cfg.Unlock.Keyring.Service
+		acct := h.cfg.Unlock.Keyring.Account
+		if svc != "" && acct != "" {
+			if err := keyring.Set(svc, acct, string(pp1)); err == nil {
+				fmt.Fprintf(os.Stderr, "[hush] \u2713 saved to OS keyring (service=%q account=%q) \u2014 next startup will be silent.\n", svc, acct)
+			} else {
+				fmt.Fprintf(os.Stderr, "[hush] note: couldn't save to keyring (%v); you'll be prompted again next startup.\n", err)
+			}
+		}
+	}
+	fmt.Fprintln(os.Stderr)
+	return pp1, nil
+}
+
+func promptOnce(prompt string) ([]byte, error) {
+	fmt.Fprint(os.Stderr, prompt)
+	pp, err := term.ReadPassword(int(os.Stdin.Fd()))
+	fmt.Fprintln(os.Stderr)
+	if err != nil {
+		return nil, fmt.Errorf("read passphrase: %w", err)
+	}
+	return pp, nil
+}
+
+func wipe(b []byte) {
+	for i := range b {
+		b[i] = 0
+	}
+}
+
+func bytesEqual(a, b []byte) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }

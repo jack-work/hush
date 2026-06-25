@@ -54,9 +54,14 @@ func New(cfg config.UnlockConfig) (Unlocker, error) {
 	switch cfg.Method {
 	case "", "passphrase":
 		return &passphraseUnlocker{}, nil
+	case "keyring":
+		return &keyringUnlocker{
+			service: cfg.Keyring.Service,
+			account: cfg.Keyring.Account,
+		}, nil
 	case "exec":
 		return &execUnlocker{argv: cfg.Exec}, nil
 	default:
-		return nil, fmt.Errorf("unknown unlock method %q (valid: passphrase, exec)", cfg.Method)
+		return nil, fmt.Errorf("unknown unlock method %q (valid: passphrase, keyring, exec)", cfg.Method)
 	}
 }

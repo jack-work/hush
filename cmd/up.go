@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"log"
@@ -9,13 +10,12 @@ import (
 	"path/filepath"
 	"time"
 
-	"golang.org/x/term"
-
 	"github.com/spf13/cobra"
 
 	"github.com/jack-work/hush/agent"
 	"github.com/jack-work/hush/client"
 	"github.com/jack-work/hush/identity"
+	"github.com/jack-work/hush/unlock"
 )
 
 const agentChildEnv = "HUSH_AGENT_CHILD"
@@ -74,13 +74,24 @@ func runUp(cmd *cobra.Command, args []string) error {
 }
 
 func promptAndUnlock(identityFile string) (*identity.DecryptedIdentity, error) {
-	fmt.Fprint(os.Stderr, "Enter passphrase for hush identity: ")
-	passphrase, err := term.ReadPassword(int(os.Stdin.Fd()))
-	fmt.Fprintln(os.Stderr)
+	// Build the resolver from the active config. Method defaults to
+	// "passphrase" (TTY prompt) when nothing is set in hush.toml, so
+	// behavior is identical to before this seam existed.
+	u, err := unlock.New(cfg.Unlock)
 	if err != nil {
-		return nil, fmt.Errorf("read passphrase: %w", err)
+		return nil, err
 	}
-	return identity.Unlock(identityFile, passphrase)
+	passphrase, err := u.Passphrase(context.Background())
+	if err != nil {
+		return nil, err
+	}
+	id, err := identity.Unlock(identityFile, passphrase)
+	// Wipe the slice the moment the identity is decrypted, regardless
+	// of where it came from.
+	for i := range passphrase {
+		passphrase[i] = 0
+	}
+	return id, err
 }
 
 // spawnDaemon re-execs the binary as a detached child, passing the decrypted

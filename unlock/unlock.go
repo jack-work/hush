@@ -52,7 +52,12 @@ type Unlocker interface {
 // that wants to validate config without actually unlocking.
 func New(cfg config.UnlockConfig) (Unlocker, error) {
 	switch cfg.Method {
-	case "", "passphrase":
+	case "", "auto":
+		return &autoUnlocker{
+			service: cfg.Keyring.Service,
+			account: cfg.Keyring.Account,
+		}, nil
+	case "passphrase":
 		return &passphraseUnlocker{}, nil
 	case "keyring":
 		return &keyringUnlocker{
@@ -62,6 +67,6 @@ func New(cfg config.UnlockConfig) (Unlocker, error) {
 	case "exec":
 		return &execUnlocker{argv: cfg.Exec}, nil
 	default:
-		return nil, fmt.Errorf("unknown unlock method %q (valid: passphrase, keyring, exec)", cfg.Method)
+		return nil, fmt.Errorf("unknown unlock method %q (valid: auto, passphrase, keyring, exec)", cfg.Method)
 	}
 }

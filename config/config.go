@@ -167,7 +167,7 @@ func Load() (*Config, error) {
 func loadFromDirs(cfgDir, sDir, rDir string) (*Config, error) {
 	viper.SetDefault("ttl", "30m")
 	viper.SetDefault("identity", filepath.Join(cfgDir, "identity.age"))
-	viper.SetDefault("unlock.method", "passphrase")
+	viper.SetDefault("unlock.method", "auto")
 	viper.SetDefault("unlock.keyring.service", "hush")
 	viper.SetDefault("unlock.keyring.account", "default")
 

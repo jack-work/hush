@@ -6,13 +6,13 @@ import (
 	"github.com/jack-work/hush/config"
 )
 
-func TestNew_DefaultsToPassphrase(t *testing.T) {
-	u, err := New(config.UnlockConfig{})
+func TestNew_DefaultsToAuto(t *testing.T) {
+	u, err := New(config.UnlockConfig{Keyring: config.KeyringConfig{Service: "svc", Account: "acct"}})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	if _, ok := u.(*passphraseUnlocker); !ok {
-		t.Fatalf("empty method should yield passphraseUnlocker, got %T", u)
+	if _, ok := u.(*autoUnlocker); !ok {
+		t.Fatalf("empty method should yield autoUnlocker, got %T", u)
 	}
 }
 

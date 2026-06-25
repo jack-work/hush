@@ -17,6 +17,45 @@ type Config struct {
 	CommandsDir  string
 	StateDir     string
 	RuntimeDir   string
+	Unlock       UnlockConfig
+}
+
+// UnlockConfig controls how the agent acquires the passphrase that
+// decrypts the on-disk age identity at startup. The chosen method is a
+// property of the host (and its surrounding desktop environment), not
+// of any particular consumer or secret — hush owns the bootstrap so
+// every consumer (figaro, gws, brave, ...) gets the same UX for free.
+//
+// Default is "passphrase" (TTY prompt), preserving today's behavior.
+type UnlockConfig struct {
+	// Method names the resolver:
+	//
+	//   "passphrase" (default) — prompt on the terminal.
+	//   "keyring"              — look up in the OS keyring
+	//                            (Secret Service / Keychain / Credential
+	//                            Manager) under Service/Account.
+	//   "exec"                 — run an external command and read the
+	//                            passphrase from its stdout.
+	Method string
+
+	// Keyring is consulted when Method == "keyring".
+	Keyring KeyringConfig
+
+	// Exec is the argv consulted when Method == "exec". The command's
+	// stdout is read; a single trailing newline is stripped.
+	Exec []string
+}
+
+// KeyringConfig identifies the OS-keyring entry holding the hush
+// passphrase. Both fields default to "hush" / "default" so a fresh
+// `[unlock]` table with just `method = "keyring"` works out of the box.
+//
+// HUSH_KEYRING_SERVICE overrides Service (used by dev shells to
+// namespace per-shell keyring entries, mirroring how HUSH_CONFIG_DIR
+// scopes the on-disk config).
+type KeyringConfig struct {
+	Service string
+	Account string
 }
 
 // Directory resolution honors, in priority order:
@@ -128,6 +167,9 @@ func Load() (*Config, error) {
 func loadFromDirs(cfgDir, sDir, rDir string) (*Config, error) {
 	viper.SetDefault("ttl", "30m")
 	viper.SetDefault("identity", filepath.Join(cfgDir, "identity.age"))
+	viper.SetDefault("unlock.method", "passphrase")
+	viper.SetDefault("unlock.keyring.service", "hush")
+	viper.SetDefault("unlock.keyring.account", "default")
 
 	viper.SetConfigName("hush")
 	viper.SetConfigType("toml")
@@ -148,6 +190,15 @@ func loadFromDirs(cfgDir, sDir, rDir string) (*Config, error) {
 		return nil, fmt.Errorf("parse ttl: %w", err)
 	}
 
+	// HUSH_KEYRING_SERVICE overrides unlock.keyring.service so dev
+	// shells can namespace keyring entries the same way they scope
+	// HUSH_CONFIG_DIR. Done explicitly because viper's env binding
+	// for dotted keys is finicky.
+	keyringService := viper.GetString("unlock.keyring.service")
+	if v := os.Getenv("HUSH_KEYRING_SERVICE"); v != "" {
+		keyringService = v
+	}
+
 	return &Config{
 		TTL:          ttl,
 		IdentityFile: viper.GetString("identity"),
@@ -155,5 +206,13 @@ func loadFromDirs(cfgDir, sDir, rDir string) (*Config, error) {
 		CommandsDir:  filepath.Join(cfgDir, "commands"),
 		StateDir:     sDir,
 		RuntimeDir:   rDir,
+		Unlock: UnlockConfig{
+			Method: viper.GetString("unlock.method"),
+			Keyring: KeyringConfig{
+				Service: keyringService,
+				Account: viper.GetString("unlock.keyring.account"),
+			},
+			Exec: viper.GetStringSlice("unlock.exec"),
+		},
 	}, nil
 }

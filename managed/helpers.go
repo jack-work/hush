@@ -12,14 +12,11 @@ import (
 )
 
 // initIdentity generates a new age keypair and encrypts it with the given
-// passphrase. Returns the public key string.
+// passphrase. Returns the public key string. The caller owns the
+// passphrase buffer — we do NOT wipe it here, because the same bytes
+// often need to be handed to a keyring write in the bootstrap flow.
+// Callers should defer their own wipe.
 func initIdentity(cfg *config.Config, passphrase []byte) (string, error) {
-	defer func() {
-		for i := range passphrase {
-			passphrase[i] = 0
-		}
-	}()
-
 	identityPath := cfg.IdentityFile
 	pubPath := identityPath + ".pub"
 

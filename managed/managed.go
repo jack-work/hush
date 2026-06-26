@@ -89,6 +89,21 @@ type Options struct {
 
 	// Logger for the embedded agent. If nil, logs to stderr.
 	Logger *log.Logger
+
+	// PromptPassphrase, when non-nil, replaces hush's built-in TTY
+	// prompt during first-run identity bootstrap. The callback should
+	// drive the entire passphrase UX (prompt, confirm, validate) and
+	// return the agreed-upon bytes. The caller owns the returned
+	// buffer; hush will wipe it after use.
+	//
+	// Use this to integrate hush's bootstrap into a richer TUI — e.g.,
+	// a bubbletea/huh-driven form that owns the terminal and would
+	// otherwise collide with hush trying to read from /dev/tty in
+	// parallel.
+	//
+	// Returning a nil/empty slice or an error aborts the bootstrap;
+	// the consumer must handle the error from EnsureReady.
+	PromptPassphrase func() ([]byte, error)
 }
 
 // Hush is a managed hush client that transparently handles external vs
@@ -472,10 +487,25 @@ func (h *Hush) startEmbedded() error {
 // to unlock the identity immediately without a second prompt. The
 // caller owns the buffer and is responsible for wiping it.
 func (h *Hush) bootstrapNewIdentity() ([]byte, error) {
+	// If the consumer supplied a callback, delegate the entire
+	// passphrase UX. The callback owns the terminal (e.g. a
+	// bubbletea/huh form) and returns the agreed-upon bytes after
+	// its own prompt+confirm+validation.
+	if h.opts.PromptPassphrase != nil {
+		pp, err := h.opts.PromptPassphrase()
+		if err != nil {
+			return nil, err
+		}
+		if len(pp) == 0 {
+			return nil, fmt.Errorf("passphrase cannot be empty")
+		}
+		return h.finalizeBootstrap(pp)
+	}
+
 	if !term.IsTerminal(int(os.Stdin.Fd())) {
 		return nil, fmt.Errorf(
-			"first-time setup for %q needs a controlling terminal, but stdin is not a TTY. " +
-				"Run your application interactively once to set the passphrase, " +
+			"first-time setup for %q needs a controlling terminal, but stdin is not a TTY. "+
+				"Run your application interactively once to set the passphrase, "+
 				"or pre-initialize via your application's setup command.",
 			h.opts.AppName)
 	}
@@ -503,22 +533,27 @@ func (h *Hush) bootstrapNewIdentity() ([]byte, error) {
 		return nil, fmt.Errorf("passphrases do not match")
 	}
 	wipe(pp2)
+	return h.finalizeBootstrap(pp1)
+}
 
-	pub, err := initIdentity(h.cfg, pp1)
+// finalizeBootstrap writes the encrypted identity and — when the
+// configured unlock method is keyring-aware — persists the
+// passphrase to the OS keyring so the next startup is silent.
+// Returns the (still-live) passphrase bytes; caller wipes when done.
+func (h *Hush) finalizeBootstrap(pp []byte) ([]byte, error) {
+	pub, err := initIdentity(h.cfg, pp)
 	if err != nil {
-		wipe(pp1)
+		wipe(pp)
 		return nil, fmt.Errorf("init identity: %w", err)
 	}
 	fmt.Fprintf(os.Stderr, "[hush] \u2713 identity created (public key %s)\n", pub)
 
-	// Persist to the keyring if the configured method would read from
-	// it. This is the bridge that makes the next startup silent.
 	method := h.cfg.Unlock.Method
 	if method == "" || method == "auto" || method == "keyring" {
 		svc := h.cfg.Unlock.Keyring.Service
 		acct := h.cfg.Unlock.Keyring.Account
 		if svc != "" && acct != "" {
-			if err := keyring.Set(svc, acct, string(pp1)); err == nil {
+			if err := keyring.Set(svc, acct, string(pp)); err == nil {
 				fmt.Fprintf(os.Stderr, "[hush] \u2713 saved to OS keyring (service=%q account=%q) \u2014 next startup will be silent.\n", svc, acct)
 			} else {
 				fmt.Fprintf(os.Stderr, "[hush] note: couldn't save to keyring (%v); you'll be prompted again next startup.\n", err)
@@ -526,7 +561,7 @@ func (h *Hush) bootstrapNewIdentity() ([]byte, error) {
 		}
 	}
 	fmt.Fprintln(os.Stderr)
-	return pp1, nil
+	return pp, nil
 }
 
 func promptOnce(prompt string) ([]byte, error) {

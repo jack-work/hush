@@ -11,6 +11,8 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+
+	"github.com/jack-work/hush/internal/singleton"
 )
 
 func init() {
@@ -37,7 +39,7 @@ func runDown(cmd *cobra.Command, args []string) error {
 	}
 	defer f.Close()
 
-	if lockFree(f) {
+	if free, _ := singleton.Free(pidPath); free {
 		os.Remove(sockPath) // stale leftover, e.g. a SIGKILL'd agent
 		return fmt.Errorf("no agent running (lock at %s is free)", pidPath)
 	}
@@ -59,7 +61,7 @@ func runDown(cmd *cobra.Command, args []string) error {
 	// The agent releases the lock as the last step of its shutdown.
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
-		if lockFree(f) {
+		if free, _ := singleton.Free(pidPath); free {
 			fmt.Fprintf(os.Stderr, "agent (pid %d) stopped\n", pid)
 			return nil
 		}
@@ -67,14 +69,4 @@ func runDown(cmd *cobra.Command, args []string) error {
 	}
 
 	return fmt.Errorf("agent (pid %d) did not stop within 5s", pid)
-}
-
-// lockFree reports whether the agent's exclusive flock is currently free.
-// It momentarily takes (and releases) a shared lock to find out.
-func lockFree(f *os.File) bool {
-	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_SH|syscall.LOCK_NB); err != nil {
-		return false
-	}
-	syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
-	return true
 }

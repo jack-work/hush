@@ -11,14 +11,15 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
-	"syscall"
 	"testing"
 	"time"
 
 	"filippo.io/age"
 
 	"github.com/jack-work/hush/client"
+	"github.com/jack-work/hush/internal/singleton"
 )
 
 var hushBin string
@@ -30,6 +31,9 @@ func TestMain(m *testing.M) {
 		os.Exit(1)
 	}
 	hushBin = filepath.Join(dir, "hush")
+	if runtime.GOOS == "windows" {
+		hushBin += ".exe"
+	}
 	out, err := exec.Command("go", "build", "-buildvcs=false", "-o", hushBin, "..").CombinedOutput()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "build hush: %v\n%s", err, out)
@@ -133,16 +137,11 @@ func (w *world) client() *client.Client {
 
 func (w *world) lockFree(t *testing.T) bool {
 	t.Helper()
-	f, err := os.Open(w.pidPath)
+	free, err := singleton.Free(w.pidPath)
 	if err != nil {
-		t.Fatalf("open lock file: %v", err)
+		t.Fatalf("probe single-instance lock: %v", err)
 	}
-	defer f.Close()
-	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_SH|syscall.LOCK_NB); err != nil {
-		return false
-	}
-	syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
-	return true
+	return free
 }
 
 // TestUpDownLifecycle: full happy path — encrypt/decrypt round trip,

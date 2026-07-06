@@ -10,13 +10,13 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"syscall"
 	"time"
 
 	"filippo.io/age"
 	"github.com/jack-work/hush/identity"
+	"github.com/jack-work/hush/internal/singleton"
 	"github.com/jack-work/hush/oauth"
 	"github.com/jack-work/hush/secrets"
 	"github.com/jack-work/hush/version"
@@ -33,9 +33,9 @@ type Agent struct {
 	oauth      *oauth.Manager
 	log        *log.Logger
 
-	// lockFile holds the single-instance flock for the agent's lifetime.
+	// lock holds the single-instance lock for the agent's lifetime.
 	// Non-nil iff this process owns the runtime directory's files.
-	lockFile *os.File
+	lock *singleton.Lock
 }
 
 // New creates an agent from an already-decrypted identity. stateDir is used
@@ -328,12 +328,12 @@ func (a *Agent) shutdown() {
 
 	// Only the lock holder owns the runtime files. A Run that failed to
 	// acquire the lock must not touch the live agent's socket.
-	if a.lockFile != nil {
+	if a.lock != nil {
 		os.Remove(a.sockPath())
-		// Release the lock last; the PID file itself stays in place —
+		// Release the lock last; the PID file itself stays in place,
 		// it is the lock inode (see acquireLock).
-		a.lockFile.Close()
-		a.lockFile = nil
+		a.lock.Release()
+		a.lock = nil
 	}
 	a.log.Printf("agent stopped")
 }
@@ -348,39 +348,29 @@ func (a *Agent) pidPath() string {
 
 // acquireLock takes the single-instance lock: an exclusive flock(2) on the
 // PID file, held for the agent's lifetime. Acquiring the lock *is* the
-// claim — there is no window between checking for a live agent and
-// becoming one. The kernel releases the lock when the process exits,
+// claim: there is no window between checking for a live agent and
+// becoming one. The OS releases the lock when the process exits,
 // however it exits, so there is no stale state to detect or clean up.
 //
-// The PID file is never unlinked, by anyone: flock attaches to the inode,
-// so removing the file would let a second agent lock a fresh inode at the
-// same path while the first still holds the old one. Its content (our pid)
-// is informational, for `hush down` and humans.
+// The PID file is never unlinked, by anyone: the lock attaches to the
+// inode (Unix) or handle (Windows), so removing the file would let a
+// second agent lock a fresh inode at the same path while the first still
+// holds the old one. Its content (our pid) is informational, for
+// `hush down` and humans. The platform specifics live in
+// internal/singleton.
 func (a *Agent) acquireLock() error {
-	f, err := os.OpenFile(a.pidPath(), os.O_CREATE|os.O_RDWR, 0600)
+	lock, err := singleton.Acquire(a.pidPath(), os.Getpid())
 	if err != nil {
-		return fmt.Errorf("open lock file: %w", err)
-	}
-	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
-		data, _ := io.ReadAll(f)
-		f.Close()
-		holder := strings.TrimSpace(string(data))
-		if holder == "" {
-			holder = "unknown pid"
-		} else {
-			holder = "pid " + holder
+		if errors.Is(err, singleton.ErrHeld) {
+			holder := "unknown pid"
+			if h, herr := singleton.Holder(a.pidPath()); herr == nil {
+				holder = fmt.Sprintf("pid %d", h)
+			}
+			return fmt.Errorf("agent already running (%s holds %s)", holder, a.pidPath())
 		}
-		return fmt.Errorf("agent already running (%s holds %s)", holder, a.pidPath())
+		return fmt.Errorf("acquire single-instance lock: %w", err)
 	}
-	if err := f.Truncate(0); err != nil {
-		f.Close()
-		return fmt.Errorf("truncate lock file: %w", err)
-	}
-	if _, err := f.WriteAt([]byte(strconv.Itoa(os.Getpid())), 0); err != nil {
-		f.Close()
-		return fmt.Errorf("write pid: %w", err)
-	}
-	a.lockFile = f
+	a.lock = lock
 	return nil
 }
 

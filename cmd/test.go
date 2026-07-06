@@ -22,6 +22,7 @@ import (
 	"github.com/jack-work/hush/agent"
 	"github.com/jack-work/hush/client"
 	"github.com/jack-work/hush/identity"
+	"github.com/jack-work/hush/internal/singleton"
 	"github.com/jack-work/hush/secrets"
 )
 
@@ -173,8 +174,8 @@ func runTest(cmd *cobra.Command, args []string) error {
 	// --- Encrypt via agent ---
 	fmt.Println("\n=== Encrypt via Agent ===")
 	plainValues := map[string]string{
-		"secret_key":  "my-secret-value",
-		"public_key":  "not-secret",
+		"secret_key": "my-secret-value",
+		"public_key": "not-secret",
 	}
 	encResp, err := testRPC(sockPath, agent.Request{Op: "encrypt", Values: plainValues})
 	if err != nil {
@@ -357,17 +358,13 @@ func runTest(cmd *cobra.Command, args []string) error {
 	if _, err := os.Stat(sockPath); err == nil {
 		return fmt.Errorf("socket file not cleaned up")
 	}
-	// The PID file persists by design — it is the single-instance lock
-	// inode — but the lock itself must be free after shutdown.
-	lf, err := os.Open(pidFile)
-	if err != nil {
-		return fmt.Errorf("lock file missing after shutdown: %w", err)
-	}
-	defer lf.Close()
-	if err := syscall.Flock(int(lf.Fd()), syscall.LOCK_SH|syscall.LOCK_NB); err != nil {
+	// The PID file persists by design (it is the single-instance lock
+	// inode) but the lock itself must be free after shutdown.
+	if free, err := singleton.Free(pidFile); err != nil {
+		return fmt.Errorf("probe single-instance lock: %w", err)
+	} else if !free {
 		return fmt.Errorf("single-instance lock still held after shutdown")
 	}
-	syscall.Flock(int(lf.Fd()), syscall.LOCK_UN)
 	fmt.Println("  Socket removed, single-instance lock released")
 
 	fmt.Println("\n✓ All tests passed")

@@ -115,9 +115,12 @@ func decryptViaAgent(secretsFile string) (map[string]string, error) {
 	return c.Decrypt(rawValues)
 }
 
-// ensureAgent checks if an agent is running. If not, starts one implicitly
-// when a TTY is available. In non-interactive contexts (agents, pipes, cron),
-// returns a clear error telling the user to start the agent manually.
+// ensureAgent checks if an agent is running and, if not, starts one
+// implicitly. With unlock.method = auto or keyring and a seeded OS
+// keyring, this is silent and needs no terminal: the "just works"
+// autostart path. Only the passphrase (TTY) backend needs an interactive
+// terminal; when it needs one and none exists, the unlock returns a clear
+// error, which we augment with recovery guidance.
 func ensureAgent(sockPath string) error {
 	if err := pingAgent(sockPath); err == nil {
 		return nil // agent is alive
@@ -126,15 +129,18 @@ func ensureAgent(sockPath string) error {
 	// No agent — clean up stale socket if present.
 	os.Remove(sockPath)
 
-	// Check if we have an interactive terminal for passphrase input.
-	if !term.IsTerminal(int(os.Stdin.Fd())) {
-		return fmt.Errorf("hush agent is not running and no interactive terminal is available to prompt for a passphrase.\n\nStart the agent manually from an interactive shell:\n\n  hush up -d")
+	interactive := term.IsTerminal(int(os.Stdin.Fd()))
+	if interactive {
+		fmt.Fprintln(os.Stderr, "No running agent. Starting one...")
 	}
-
-	fmt.Fprintln(os.Stderr, "No running agent. Starting one...")
 
 	id, err := promptAndUnlock(cfg.IdentityFile)
 	if err != nil {
+		if !interactive {
+			return fmt.Errorf("hush agent is not running and could not start it non-interactively: %w\n\n"+
+				"Seed the passphrase into your OS keyring so autostart is silent:\n\n  hush keyring set\n\n"+
+				"or start the agent manually from an interactive shell:\n\n  hush up -d", err)
+		}
 		return err
 	}
 

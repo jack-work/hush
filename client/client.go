@@ -257,9 +257,13 @@ func (c *Client) rpc(req agent.Request) (*agent.Response, error) {
 	return &resp, nil
 }
 
-// DefaultSocket returns the default agent socket path, respecting
-// XDG_RUNTIME_DIR.
+// DefaultSocket returns the default agent socket path, matching the
+// runtime-dir precedence used by config: HUSH_RUNTIME_DIR, then
+// XDG_RUNTIME_DIR, then the OS temp dir.
 func DefaultSocket() (string, error) {
+	if d := os.Getenv("HUSH_RUNTIME_DIR"); d != "" {
+		return filepath.Join(d, "agent.sock"), nil
+	}
 	if d := os.Getenv("XDG_RUNTIME_DIR"); d != "" {
 		return filepath.Join(d, "hush", "agent.sock"), nil
 	}

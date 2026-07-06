@@ -92,6 +92,14 @@ func promptAndUnlock(identityFile string) (*identity.DecryptedIdentity, error) {
 	for i := range passphrase {
 		passphrase[i] = 0
 	}
+	if err != nil {
+		switch cfg.Unlock.Method {
+		case "", "auto", "keyring":
+			// A wrong passphrase cached in the keyring would fail silently
+			// on every startup. Point the user at the recovery path.
+			return nil, fmt.Errorf("%w\n\nif the passphrase saved in your OS keyring is wrong, clear it and retry:\n  hush keyring clear", err)
+		}
+	}
 	return id, err
 }
 

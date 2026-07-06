@@ -3,6 +3,10 @@ package agent
 import "encoding/json"
 
 // Request is the JSON envelope sent by clients over the unix socket.
+//
+// Op is one of: decrypt, encrypt, status, version, shutdown, and the
+// oauth_* family below. "shutdown" asks the agent to stop gracefully
+// and carries no other fields.
 type Request struct {
 	Op string `json:"op"`
 

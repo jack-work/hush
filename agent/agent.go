@@ -156,12 +156,23 @@ func (a *Agent) handleConn(conn net.Conn) {
 		resp = a.handleOAuthDelete(req)
 	case "oauth_list":
 		resp = a.handleOAuthList()
+	case "shutdown":
+		resp = a.handleShutdown()
 	default:
 		resp = errResponse(fmt.Sprintf("unknown op: %q", req.Op))
 	}
 
 	conn.Write(resp)
 	conn.Write([]byte("\n"))
+
+	// A shutdown reply is written above before we drop the listener, so
+	// the client still reads its ok. Closing the listener unblocks the
+	// accept loop; Run returns and a.shutdown() zeros the identity and
+	// releases the lock. This is the cross-platform stop path (Windows
+	// cannot SIGTERM a detached daemon).
+	if req.Op == "shutdown" {
+		a.listener.Close()
+	}
 }
 
 func (a *Agent) handleDecrypt(req Request) []byte {
@@ -317,6 +328,13 @@ func (a *Agent) handleStatus() []byte {
 		remaining = 0
 	}
 	return okResponse(Response{TTLRemaining: remaining.String()})
+}
+
+// handleShutdown acknowledges a graceful-stop request. The actual
+// listener close happens in handleConn after this reply is flushed.
+func (a *Agent) handleShutdown() []byte {
+	a.log.Printf("shutdown requested via RPC")
+	return okResponse(Response{})
 }
 
 func (a *Agent) shutdown() {

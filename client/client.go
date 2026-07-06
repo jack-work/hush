@@ -131,6 +131,18 @@ func (c *Client) Ping() error {
 	return err
 }
 
+// Shutdown asks the agent to stop gracefully. The agent flushes this
+// reply, then closes its listener and zeros the identity. This is the
+// cross-platform stop path used by `hush down` (Windows cannot SIGTERM
+// a detached daemon).
+func (c *Client) Shutdown() error {
+	resp, err := c.rpc(agent.Request{Op: "shutdown"})
+	if err != nil {
+		return err
+	}
+	return checkResp(resp)
+}
+
 // OAuthRegisterRequest is the input to OAuthRegister.
 type OAuthRegisterRequest struct {
 	Name         string

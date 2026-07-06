@@ -2,16 +2,13 @@ package cmd
 
 import (
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
-	"strconv"
-	"strings"
-	"syscall"
 	"time"
 
 	"github.com/spf13/cobra"
 
+	"github.com/jack-work/hush/client"
 	"github.com/jack-work/hush/internal/singleton"
 )
 
@@ -25,37 +22,33 @@ var downCmd = &cobra.Command{
 	RunE:  runDown,
 }
 
-// runDown decides liveness by probing the agent's single-instance flock
-// rather than pid heuristics: a shared lock can be taken iff no agent
-// holds the exclusive one. The PID file is never removed — it is the
-// lock inode (see agent.acquireLock).
+// runDown decides liveness by probing the agent's single-instance lock
+// rather than pid heuristics: the shared lock can be taken iff no agent
+// holds the exclusive one. The PID file is never removed (it is the lock
+// inode; see agent.acquireLock).
+//
+// Shutdown is a socket RPC, not a signal: Windows cannot SIGTERM a
+// detached daemon, and the RPC path works identically on every OS. If
+// the agent holds the lock but will not answer, we force-terminate the
+// pid as a last resort.
 func runDown(cmd *cobra.Command, args []string) error {
 	pidPath := filepath.Join(cfg.RuntimeDir, "agent.pid")
 	sockPath := filepath.Join(cfg.RuntimeDir, "agent.sock")
 
-	f, err := os.Open(pidPath)
-	if err != nil {
-		return fmt.Errorf("no agent running (no lock file at %s)", pidPath)
-	}
-	defer f.Close()
-
 	if free, _ := singleton.Free(pidPath); free {
-		os.Remove(sockPath) // stale leftover, e.g. a SIGKILL'd agent
+		os.Remove(sockPath) // stale leftover, e.g. a hard-killed agent
 		return fmt.Errorf("no agent running (lock at %s is free)", pidPath)
 	}
 
-	data, _ := io.ReadAll(f)
-	pid, err := strconv.Atoi(strings.TrimSpace(string(data)))
-	if err != nil {
-		return fmt.Errorf("agent holds the lock but pid file is unreadable: %q", strings.TrimSpace(string(data)))
-	}
+	pid, perr := singleton.Holder(pidPath)
 
-	proc, err := os.FindProcess(pid)
-	if err != nil {
-		return fmt.Errorf("find agent process %d: %w", pid, err)
-	}
-	if err := proc.Signal(syscall.SIGTERM); err != nil {
-		return fmt.Errorf("failed to signal agent (pid %d): %w", pid, err)
+	if err := client.NewWithSocket(sockPath).Shutdown(); err != nil {
+		// The agent holds the lock but did not answer the RPC. Force it.
+		if perr == nil && pid > 0 {
+			if proc, e := os.FindProcess(pid); e == nil {
+				proc.Kill()
+			}
+		}
 	}
 
 	// The agent releases the lock as the last step of its shutdown.

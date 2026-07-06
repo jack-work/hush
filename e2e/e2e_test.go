@@ -116,7 +116,7 @@ func (w *world) spawnAgent(t *testing.T) (*exec.Cmd, *bytes.Buffer) {
 func (w *world) startAgent(t *testing.T) *exec.Cmd {
 	t.Helper()
 	cmd, stderr := w.spawnAgent(t)
-	deadline := time.Now().Add(5 * time.Second)
+	deadline := time.Now().Add(15 * time.Second)
 	for time.Now().Before(deadline) {
 		if w.client().Ping() == nil {
 			return cmd

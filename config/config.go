@@ -75,11 +75,7 @@ func configDir() (string, error) {
 	if d := os.Getenv("XDG_CONFIG_HOME"); d != "" {
 		return filepath.Join(d, "hush"), nil
 	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "", fmt.Errorf("resolve config dir: %w", err)
-	}
-	return filepath.Join(home, ".config", "hush"), nil
+	return defaultConfigDir()
 }
 
 func stateDir() (string, error) {
@@ -89,11 +85,7 @@ func stateDir() (string, error) {
 	if d := os.Getenv("XDG_STATE_HOME"); d != "" {
 		return filepath.Join(d, "hush"), nil
 	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "", fmt.Errorf("resolve state dir: %w", err)
-	}
-	return filepath.Join(home, ".local", "state", "hush"), nil
+	return defaultStateDir()
 }
 
 func runtimeDir() (string, error) {

@@ -2,38 +2,62 @@ package unlock
 
 import (
 	"context"
+	"encoding/base64"
 	"os"
-	"path/filepath"
-	"strings"
+	"strconv"
 	"testing"
 
 	"github.com/jack-work/hush/config"
 )
 
-// writeShim drops a tiny POSIX shell script at base/<name> that prints
-// the given string on stdout (no trailing newline added by us — the
-// caller picks). Returns the absolute path. Marked executable.
-func writeShim(t *testing.T, base, name, out string) string {
-	t.Helper()
-	path := filepath.Join(base, name)
-	body := "#!/bin/sh\nprintf '%s' " + shellQuote(out) + "\n"
-	if err := os.WriteFile(path, []byte(body), 0o755); err != nil {
-		t.Fatalf("write shim: %v", err)
+// The exec backend runs a user-supplied command. To test it without a
+// POSIX shell (Windows has none), the "command" is this very test binary
+// re-invoked to run TestExecHelperProcess, which emits an exact,
+// base64-encoded byte string on stdout and exits with a chosen code.
+// This is the standard os/exec testing pattern and is fully portable.
+
+// helperArgv builds an argv that re-execs the test binary as the exec
+// helper. The payload (base64 output, exit code) rides after "--" so the
+// testing flag parser leaves it alone.
+func helperArgv(out string, exit int) []string {
+	return []string{
+		os.Args[0], "-test.run=TestExecHelperProcess", "--",
+		base64.StdEncoding.EncodeToString([]byte(out)), strconv.Itoa(exit),
 	}
-	return path
 }
 
-// shellQuote wraps s in single quotes, escaping any embedded single
-// quote with the standard '\'' dance. Good enough for our test inputs.
-func shellQuote(s string) string {
-	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+func execCfg(argv ...string) config.UnlockConfig {
+	return config.UnlockConfig{Method: "exec", Exec: argv}
+}
+
+// TestExecHelperProcess is not a real test: it is the child process the
+// exec-unlocker tests invoke. It no-ops unless it sees the payload after
+// "--", so it is inert during a normal suite run.
+func TestExecHelperProcess(t *testing.T) {
+	payload := argsAfterDoubleDash()
+	if len(payload) < 2 {
+		return
+	}
+	out, err := base64.StdEncoding.DecodeString(payload[0])
+	if err != nil {
+		os.Exit(2)
+	}
+	os.Stdout.Write(out)
+	code, _ := strconv.Atoi(payload[1])
+	os.Exit(code)
+}
+
+func argsAfterDoubleDash() []string {
+	for i, a := range os.Args {
+		if a == "--" {
+			return os.Args[i+1:]
+		}
+	}
+	return nil
 }
 
 func TestExecUnlocker_StripsSingleTrailingLF(t *testing.T) {
-	dir := t.TempDir()
-	shim := writeShim(t, dir, "pp.sh", "hunter2\n")
-
-	u, err := New(execCfg(shim))
+	u, err := New(execCfg(helperArgv("hunter2\n", 0)...))
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -47,10 +71,7 @@ func TestExecUnlocker_StripsSingleTrailingLF(t *testing.T) {
 }
 
 func TestExecUnlocker_StripsSingleTrailingCRLF(t *testing.T) {
-	dir := t.TempDir()
-	shim := writeShim(t, dir, "pp.sh", "hunter2\r\n")
-
-	u, _ := New(execCfg(shim))
+	u, _ := New(execCfg(helperArgv("hunter2\r\n", 0)...))
 	pp, err := u.Passphrase(context.Background())
 	if err != nil {
 		t.Fatalf("Passphrase: %v", err)
@@ -61,10 +82,7 @@ func TestExecUnlocker_StripsSingleTrailingCRLF(t *testing.T) {
 }
 
 func TestExecUnlocker_PreservesInternalAndLeadingWhitespace(t *testing.T) {
-	dir := t.TempDir()
-	shim := writeShim(t, dir, "pp.sh", " tab\there\n")
-
-	u, _ := New(execCfg(shim))
+	u, _ := New(execCfg(helperArgv(" tab\there\n", 0)...))
 	pp, err := u.Passphrase(context.Background())
 	if err != nil {
 		t.Fatalf("Passphrase: %v", err)
@@ -75,23 +93,14 @@ func TestExecUnlocker_PreservesInternalAndLeadingWhitespace(t *testing.T) {
 }
 
 func TestExecUnlocker_EmptyOutputIsError(t *testing.T) {
-	dir := t.TempDir()
-	shim := writeShim(t, dir, "pp.sh", "")
-
-	u, _ := New(execCfg(shim))
+	u, _ := New(execCfg(helperArgv("", 0)...))
 	if _, err := u.Passphrase(context.Background()); err == nil {
 		t.Fatal("expected error for empty stdout, got nil")
 	}
 }
 
 func TestExecUnlocker_NonzeroExitIsError(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "fail.sh")
-	if err := os.WriteFile(path, []byte("#!/bin/sh\nexit 7\n"), 0o755); err != nil {
-		t.Fatalf("write: %v", err)
-	}
-
-	u, _ := New(execCfg(path))
+	u, _ := New(execCfg(helperArgv("whatever", 7)...))
 	if _, err := u.Passphrase(context.Background()); err == nil {
 		t.Fatal("expected error for nonzero exit, got nil")
 	}
@@ -105,9 +114,4 @@ func TestExecUnlocker_EmptyArgvIsError(t *testing.T) {
 	if _, err := u.Passphrase(context.Background()); err == nil {
 		t.Fatal("expected error for empty argv, got nil")
 	}
-}
-
-// execCfg builds a UnlockConfig with method=exec and the given argv.
-func execCfg(argv ...string) config.UnlockConfig {
-	return config.UnlockConfig{Method: "exec", Exec: argv}
 }

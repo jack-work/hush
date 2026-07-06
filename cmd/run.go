@@ -32,19 +32,27 @@ func runCmd(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("command %q not found (looked in %s)", name, cmdDir)
 	}
 
-	// Read command.sh.
-	cmdFile := filepath.Join(cmdDir, "command.sh")
-	cmdBytes, err := os.ReadFile(cmdFile)
-	if err != nil {
-		// Check if this is a config-only command (has secrets.toml but no command.sh).
+	// Locate the command script, trying each platform candidate in order.
+	var scriptName string
+	var cmdBytes []byte
+	for _, name := range commandScriptNames() {
+		p := filepath.Join(cmdDir, name)
+		if b, err := os.ReadFile(p); err == nil {
+			scriptName, cmdBytes = name, b
+			break
+		}
+	}
+	if cmdBytes == nil {
+		// Check if this is a config-only command (secrets.toml but no script).
 		secretsFile := filepath.Join(cmdDir, "secrets.toml")
 		if _, secErr := os.Stat(secretsFile); secErr == nil {
-			return fmt.Errorf("hey — %q is config-only, pal. no command.sh in there.\n\n"+
+			return fmt.Errorf("hey — %q is config-only, pal. no command script in there.\n\n"+
 				"this one's meant to be read by another program through the hush client library.\n"+
 				"it holds secrets, sure, but it don't run nothin'. that's someone else's job.\n\n"+
-				"if you meant to make it runnable, drop a command.sh in:\n  %s", name, cmdDir)
+				"if you meant to make it runnable, drop a %s in:\n  %s", name, commandScriptNames()[0], cmdDir)
 		}
-		return fmt.Errorf("command %q missing command.sh (expected at %s)", name, cmdFile)
+		return fmt.Errorf("command %q missing a script (looked for %v in %s)",
+			name, commandScriptNames(), cmdDir)
 	}
 
 	// Decrypt secrets if secrets.toml exists.
@@ -67,7 +75,7 @@ func runCmd(cmd *cobra.Command, args []string) error {
 	ctx["Cmd"] = name
 
 	// Render template.
-	tmpl, err := template.New("command.sh").Parse(string(cmdBytes))
+	tmpl, err := template.New(scriptName).Parse(string(cmdBytes))
 	if err != nil {
 		return fmt.Errorf("parse template: %w", err)
 	}
@@ -76,8 +84,8 @@ func runCmd(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("render template: %w", err)
 	}
 
-	// Execute via sh -c.
-	sh := exec.Command("sh", "-c", rendered.String())
+	// Execute via the platform shell for this script type.
+	sh := shellCommand(rendered.String(), scriptName)
 	sh.Stdin = os.Stdin
 	sh.Stdout = os.Stdout
 	sh.Stderr = os.Stderr

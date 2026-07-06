@@ -49,7 +49,7 @@ func runEdit(cmd *cobra.Command, args []string) error {
 
 	editor := os.Getenv("EDITOR")
 	if editor == "" {
-		editor = "vi"
+		editor = defaultEditor()
 	}
 
 	// Read and decrypt current secrets via agent.
@@ -194,4 +194,3 @@ func editTOML(c *client.Client, editor, secretsPath string, data []byte) error {
 	fmt.Fprintf(os.Stderr, "saved %d secret(s) to %s\n", len(encrypted), secretsPath)
 	return nil
 }
-

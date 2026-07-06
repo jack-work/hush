@@ -6,7 +6,6 @@ import (
 	"io"
 	"log"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"time"
 
@@ -15,6 +14,8 @@ import (
 	"github.com/jack-work/hush/agent"
 	"github.com/jack-work/hush/client"
 	"github.com/jack-work/hush/identity"
+	"github.com/jack-work/hush/internal/daemon"
+	"github.com/jack-work/hush/internal/singleton"
 	"github.com/jack-work/hush/unlock"
 )
 
@@ -94,15 +95,11 @@ func promptAndUnlock(identityFile string) (*identity.DecryptedIdentity, error) {
 	return id, err
 }
 
-// spawnDaemon re-execs the binary as a detached child, passing the decrypted
-// identity over a pipe. The identity's raw bytes are zeroed after writing.
+// spawnDaemon re-execs the binary as a detached child, handing the
+// decrypted identity to it out-of-band (fd 3 on Unix, an AF_UNIX handoff
+// socket on Windows). The identity's raw bytes are zeroed after transfer.
 func spawnDaemon(id *identity.DecryptedIdentity, ttl time.Duration) error {
 	defer id.Zero()
-
-	pr, pw, err := os.Pipe()
-	if err != nil {
-		return fmt.Errorf("create pipe: %w", err)
-	}
 
 	exe, err := os.Executable()
 	if err != nil {
@@ -114,55 +111,31 @@ func spawnDaemon(id *identity.DecryptedIdentity, ttl time.Duration) error {
 		childArgs = append(childArgs, "--ttl", flagTTL)
 	}
 
-	child := exec.Command(exe, childArgs...)
-	child.Env = append(os.Environ(), agentChildEnv+"=1")
-	// Pass the pipe read end as ExtraFiles[0] → fd 3 in the child.
-	child.ExtraFiles = []*os.File{pr}
-	// Detach from terminal.
-	child.Stdin = nil
-	child.Stdout = nil
-	child.Stderr = nil
-
-	if err := child.Start(); err != nil {
-		pw.Close()
-		pr.Close()
-		return fmt.Errorf("start daemon: %w", err)
+	if _, err := daemon.Spawn(exe, childArgs, nil, id); err != nil {
+		return err
 	}
-
-	// Write raw identity bytes to pipe (zeros them), then close.
-	pr.Close() // parent doesn't read
-	if _, err := id.WriteTo(pw); err != nil {
-		pw.Close()
-		return fmt.Errorf("write identity to pipe: %w", err)
-	}
-	pw.Close()
 
 	// Wait for child to start listening.
-	if err := waitForAgent(cfg.RuntimeDir, 3*time.Second); err != nil {
+	if err := waitForAgent(cfg.RuntimeDir, 10*time.Second); err != nil {
 		return fmt.Errorf("daemon started but not responding: %w", err)
 	}
 
-	fmt.Fprintf(os.Stderr, "agent started in background (pid %d, ttl %s)\n", child.Process.Pid, ttl)
+	pid, _ := singleton.Holder(filepath.Join(cfg.RuntimeDir, "agent.pid"))
+	fmt.Fprintf(os.Stderr, "agent started in background (pid %d, ttl %s)\n", pid, ttl)
 	return nil
 }
 
 // runChild is the entry point for the re-exec'd daemon child.
-// It reads the identity from fd 3 (passed via ExtraFiles).
+// It receives the identity from the parent via the platform handoff.
 func runChild(ttl time.Duration) error {
-	pipe := os.NewFile(3, "identity-pipe")
-	if pipe == nil {
-		return fmt.Errorf("identity pipe (fd 3) not available")
-	}
-
-	raw, err := io.ReadAll(pipe)
-	pipe.Close()
+	raw, err := daemon.ReadIdentity()
 	if err != nil {
-		return fmt.Errorf("read identity from pipe: %w", err)
+		return err
 	}
 
 	id, err := identity.ParseRaw(raw)
 	if err != nil {
-		return fmt.Errorf("parse identity from pipe: %w", err)
+		return fmt.Errorf("parse identity from handoff: %w", err)
 	}
 
 	logger, logFile, err := newLogger(cfg.StateDir)

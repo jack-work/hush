@@ -6,87 +6,52 @@ package agent
 
 import (
 	"fmt"
-	"io"
 	"log"
 	"net"
-	"os"
-	"os/exec"
 	"path/filepath"
 	"time"
 
 	"github.com/jack-work/hush/identity"
+	"github.com/jack-work/hush/internal/daemon"
 )
 
 // SpawnEnvVar is the environment variable set on re-exec'd child processes
 // to signal they should enter agent mode. Exported so consuming applications
 // can check it in their own main().
-const SpawnEnvVar = "HUSH_AGENT_CHILD"
+const SpawnEnvVar = daemon.ChildEnvVar
 
 // SpawnDaemon re-execs the given executable as a detached child process,
-// passing the decrypted identity over a pipe (fd 3). The identity's raw
-// bytes are zeroed after writing.
+// handing the decrypted identity to it out-of-band (never through disk).
+// The identity's raw bytes are zeroed after transfer.
 //
 // exe is the path to the binary to re-exec (typically os.Executable()).
 // args are passed to the child process (e.g. your app's agent subcommand).
-// env is appended to os.Environ() for the child.
+// env are extra KEY=VALUE vars for the child; the platform layer sets
+// SpawnEnvVar itself.
 //
 // After return, the caller should use WaitForAgent to confirm the daemon
 // is responsive.
 func SpawnDaemon(exe string, args []string, env []string, id *identity.DecryptedIdentity) (pid int, err error) {
 	defer id.Zero()
-
-	pr, pw, err := os.Pipe()
-	if err != nil {
-		return 0, fmt.Errorf("create pipe: %w", err)
-	}
-
-	child := exec.Command(exe, args...)
-	child.Env = append(os.Environ(), env...)
-	child.Env = append(child.Env, SpawnEnvVar+"=1")
-	// Pass the pipe read end as ExtraFiles[0] → fd 3 in the child.
-	child.ExtraFiles = []*os.File{pr}
-	// Detach from terminal.
-	child.Stdin = nil
-	child.Stdout = nil
-	child.Stderr = nil
-
-	if err := child.Start(); err != nil {
-		pw.Close()
-		pr.Close()
-		return 0, fmt.Errorf("start daemon: %w", err)
-	}
-
-	pr.Close() // parent doesn't read
-	if _, err := id.WriteTo(pw); err != nil {
-		pw.Close()
-		return 0, fmt.Errorf("write identity to pipe: %w", err)
-	}
-	pw.Close()
-
-	return child.Process.Pid, nil
+	return daemon.Spawn(exe, args, env, id)
 }
 
 // RunChildFromPipe is the entry point for a re-exec'd daemon child.
-// It reads the identity from fd 3 (passed via ExtraFiles by SpawnDaemon),
-// creates an agent, and blocks until the agent exits.
+// It receives the identity from the parent (fd 3 on Unix, an AF_UNIX
+// handoff socket on Windows), creates an agent, and blocks until it
+// exits.
 //
 // This is intended to be called from the consuming application's main()
 // when it detects SpawnEnvVar is set.
 func RunChildFromPipe(ttl time.Duration, runtimeDir, stateDir string, logger *log.Logger) error {
-	pipe := os.NewFile(3, "identity-pipe")
-	if pipe == nil {
-		return fmt.Errorf("identity pipe (fd 3) not available")
-	}
-
-	raw, err := io.ReadAll(pipe)
-	pipe.Close()
+	raw, err := daemon.ReadIdentity()
 	if err != nil {
-		return fmt.Errorf("read identity from pipe: %w", err)
+		return err
 	}
 
 	id, err := identity.ParseRaw(raw)
 	if err != nil {
-		return fmt.Errorf("parse identity from pipe: %w", err)
+		return fmt.Errorf("parse identity from handoff: %w", err)
 	}
 
 	ag := New(id, ttl, runtimeDir, stateDir, logger)

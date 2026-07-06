@@ -94,26 +94,22 @@ func (w *world) command(args ...string) *exec.Cmd {
 	return cmd
 }
 
-// spawnAgent starts `hush up` in agent-child mode, piping the identity
-// over fd 3 exactly like the daemon spawn path. Does not wait for the
-// socket; callers decide whether they expect success.
+// spawnAgent starts `hush up` in agent-child mode, delivering the
+// identity over the platform handoff (fd 3 on Unix, an AF_UNIX socket on
+// Windows) exactly like the daemon spawn path, but as a controllable
+// (non-detached) child so tests can Wait and Kill it. Does not wait for
+// the socket; callers decide whether they expect success.
 func (w *world) spawnAgent(t *testing.T) (*exec.Cmd, *bytes.Buffer) {
 	t.Helper()
-	pr, pw, err := os.Pipe()
-	if err != nil {
-		t.Fatal(err)
-	}
 	cmd := w.command("up", "--ttl", "1m")
 	cmd.Env = append(cmd.Env, "HUSH_AGENT_CHILD=1")
-	cmd.ExtraFiles = []*os.File{pr}
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
+	deliver := w.prepareHandoff(t, cmd)
 	if err := cmd.Start(); err != nil {
 		t.Fatalf("start agent: %v", err)
 	}
-	pr.Close()
-	pw.Write(w.id)
-	pw.Close()
+	deliver()
 	return cmd, &stderr
 }
 

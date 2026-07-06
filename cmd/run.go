@@ -15,6 +15,8 @@ import (
 
 	"github.com/jack-work/hush/client"
 	"github.com/jack-work/hush/identity"
+	"github.com/jack-work/hush/internal/daemon"
+	"github.com/jack-work/hush/internal/singleton"
 )
 
 func runCmd(cmd *cobra.Command, args []string) error {
@@ -149,40 +151,20 @@ func ensureAgent(sockPath string) error {
 func spawnDaemonWithID(id *identity.DecryptedIdentity, ttl time.Duration) error {
 	defer id.Zero()
 
-	pr, pw, err := os.Pipe()
-	if err != nil {
-		return fmt.Errorf("create pipe: %w", err)
-	}
-
 	exe, err := os.Executable()
 	if err != nil {
 		return fmt.Errorf("find executable: %w", err)
 	}
 
-	child := exec.Command(exe, "up", "--ttl", ttl.String())
-	child.Env = append(os.Environ(), agentChildEnv+"=1")
-	child.ExtraFiles = []*os.File{pr}
-	child.Stdin = nil
-	child.Stdout = nil
-	child.Stderr = nil
-
-	if err := child.Start(); err != nil {
-		pw.Close()
-		pr.Close()
-		return fmt.Errorf("start daemon: %w", err)
+	if _, err := daemon.Spawn(exe, []string{"up", "--ttl", ttl.String()}, nil, id); err != nil {
+		return err
 	}
 
-	pr.Close()
-	if _, err := id.WriteTo(pw); err != nil {
-		pw.Close()
-		return fmt.Errorf("write identity to pipe: %w", err)
-	}
-	pw.Close()
-
-	if err := waitForAgent(cfg.RuntimeDir, 3*time.Second); err != nil {
+	if err := waitForAgent(cfg.RuntimeDir, 10*time.Second); err != nil {
 		return fmt.Errorf("agent started but not responding: %w", err)
 	}
 
-	fmt.Fprintf(os.Stderr, "Agent started (pid %d, ttl %s)\n", child.Process.Pid, ttl)
+	pid, _ := singleton.Holder(filepath.Join(cfg.RuntimeDir, "agent.pid"))
+	fmt.Fprintf(os.Stderr, "Agent started (pid %d, ttl %s)\n", pid, ttl)
 	return nil
 }

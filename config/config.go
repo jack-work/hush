@@ -208,3 +208,26 @@ func loadFromDirs(cfgDir, sDir, rDir string) (*Config, error) {
 		},
 	}, nil
 }
+
+// AppDirs returns platform-correct config and state directories for a
+// consuming application's embedded hush instance. Uses the same OS
+// conventions as hush itself (XDG on Unix, APPDATA/LOCALAPPDATA on
+// Windows) but scoped under the given app name instead of "hush".
+func AppDirs(appName string) (Dirs, error) {
+	cfgBase, err := defaultConfigDir()
+	if err != nil {
+		return Dirs{}, err
+	}
+	stateBase, err := defaultStateDir()
+	if err != nil {
+		return Dirs{}, err
+	}
+	// Replace the trailing "hush" segment with "<appName>/hush".
+	cfgBase = filepath.Join(filepath.Dir(cfgBase), appName, "hush")
+	stateBase = filepath.Join(filepath.Dir(stateBase), appName, "hush")
+	return Dirs{
+		ConfigDir:  cfgBase,
+		StateDir:   stateBase,
+		RuntimeDir: filepath.Join(os.TempDir(), appName+"-hush"),
+	}, nil
+}

@@ -342,16 +342,11 @@ func (h *Hush) tryExternalCLI() bool {
 func (h *Hush) setupEmbedded() error {
 	dirs := h.opts.Dirs
 	if dirs == nil {
-		// Derive from AppName: ~/.config/<appname>/hush/
-		home, err := os.UserHomeDir()
+		d, err := config.AppDirs(h.opts.AppName)
 		if err != nil {
-			return fmt.Errorf("resolve home dir: %w", err)
+			return fmt.Errorf("resolve dirs: %w", err)
 		}
-		dirs = &config.Dirs{
-			ConfigDir:  filepath.Join(home, ".config", h.opts.AppName, "hush"),
-			StateDir:   filepath.Join(home, ".local", "state", h.opts.AppName, "hush"),
-			RuntimeDir: filepath.Join(os.TempDir(), h.opts.AppName+"-hush"),
-		}
+		dirs = &d
 	}
 
 	cfg, err := config.LoadWithDirs(*dirs)

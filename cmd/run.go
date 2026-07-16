@@ -180,5 +180,6 @@ func spawnDaemonWithID(id *identity.DecryptedIdentity, ttl time.Duration) error 
 
 	pid, _ := singleton.Holder(filepath.Join(cfg.RuntimeDir, "agent.pid"))
 	fmt.Fprintf(os.Stderr, "Agent started (pid %d, ttl %s)\n", pid, ttl)
+	daemon.CleanAgentLogs(time.Hour)
 	return nil
 }

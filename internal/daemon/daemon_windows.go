@@ -41,7 +41,7 @@ func Spawn(exe string, args, extraEnv []string, id io.WriterTo) (int, error) {
 		os.Remove(sockPath)
 	}()
 
-	launcherPath, err := writeLauncher(exe, args, extraEnv, sockPath)
+	launcherPath, logPath, err := writeLauncher(exe, args, extraEnv, sockPath)
 	if err != nil {
 		return 0, err
 	}
@@ -63,7 +63,7 @@ func Spawn(exe string, args, extraEnv []string, id io.WriterTo) (int, error) {
 	}
 	conn, err := ln.Accept()
 	if err != nil {
-		return 0, fmt.Errorf("handoff accept (child never connected): %w", err)
+		return 0, fmt.Errorf("handoff accept (child never connected; see %s): %w", logPath, err)
 	}
 	defer conn.Close()
 	if _, err := id.WriteTo(conn); err != nil {
@@ -103,13 +103,22 @@ func ReadIdentity() ([]byte, error) {
 }
 
 // writeLauncher emits a .cmd that sets the child environment and execs
-// the agent, redirecting stderr to a log for early-crash forensics.
-func writeLauncher(exe string, args, extraEnv []string, sockPath string) (string, error) {
+// the agent, redirecting stdout+stderr to a per-launch log for
+// early-crash forensics. Each launch gets its own log file so that
+// cmd.exe's exclusive write lock on the redirect target cannot block a
+// subsequent spawn (the root cause of the "child never connected"
+// timeout on Windows).
+func writeLauncher(exe string, args, extraEnv []string, sockPath string) (launcherPath, logPath string, err error) {
 	f, err := os.CreateTemp("", "hush-launch-*.cmd")
 	if err != nil {
-		return "", fmt.Errorf("create launcher: %w", err)
+		return "", "", fmt.Errorf("create launcher: %w", err)
 	}
 	path := f.Name()
+
+	// Per-launch log file — avoids the exclusive-lock contention that
+	// occurs when every launcher appends to a shared singleton path.
+	logPath = filepath.Join(os.TempDir(),
+		fmt.Sprintf("hush-agent-%d.log", time.Now().UnixNano()))
 
 	set := func(k, v string) {
 		// %% escapes a literal % inside `set "k=v"`. Quotes protect
@@ -138,18 +147,40 @@ func writeLauncher(exe string, args, extraEnv []string, sockPath string) (string
 		}
 	}
 
-	logPath := filepath.Join(os.TempDir(), "hush-agent-stderr.log")
 	fmt.Fprintf(f, "@\"%s\"", exe)
 	for _, a := range args {
 		fmt.Fprintf(f, " \"%s\"", a)
 	}
-	fmt.Fprintf(f, " 2>>\"%s\"\r\n", logPath)
+	// Redirect both stdout and stderr so cobra help text, panics, and
+	// any other output are captured for diagnostics.
+	fmt.Fprintf(f, " >>\"%s\" 2>&1\r\n", logPath)
 
 	if err := f.Close(); err != nil {
 		os.Remove(path)
-		return "", fmt.Errorf("write launcher: %w", err)
+		return "", "", fmt.Errorf("write launcher: %w", err)
 	}
-	return path, nil
+	return path, logPath, nil
+}
+
+// CleanAgentLogs removes hush-agent-*.log files in the temp directory
+// that are older than maxAge. Call after a successful agent start to
+// prevent temp-dir bloat from per-launch log files.
+func CleanAgentLogs(maxAge time.Duration) {
+	pattern := filepath.Join(os.TempDir(), "hush-agent-*.log")
+	matches, err := filepath.Glob(pattern)
+	if err != nil {
+		return
+	}
+	cutoff := time.Now().Add(-maxAge)
+	for _, m := range matches {
+		info, err := os.Stat(m)
+		if err != nil {
+			continue
+		}
+		if info.ModTime().Before(cutoff) {
+			os.Remove(m)
+		}
+	}
 }
 
 // spawnViaWMI creates the process through WMI Win32_Process.Create, which

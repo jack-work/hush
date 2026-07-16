@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"time"
 )
 
 // Spawn re-execs exe+args as a detached background agent. extraEnv is
@@ -42,6 +43,10 @@ func Spawn(exe string, args, extraEnv []string, id io.WriterTo) (int, error) {
 
 	return child.Process.Pid, nil
 }
+
+// CleanAgentLogs is a no-op on Unix. On Windows, it removes stale
+// per-launch agent log files to prevent temp-dir bloat.
+func CleanAgentLogs(_ time.Duration) {}
 
 // ReadIdentity is the child side of the handoff: it reads the raw
 // identity bytes the parent wrote to fd 3. Call once, early, in the

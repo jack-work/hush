@@ -57,7 +57,7 @@ func argsAfterDoubleDash() []string {
 }
 
 func TestExecUnlocker_StripsSingleTrailingLF(t *testing.T) {
-	u, err := New(execCfg(helperArgv("hunter2\n", 0)...))
+	u, err := New(execCfg(helperArgv("hunter2\n", 0)...), Hooks{})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -71,7 +71,7 @@ func TestExecUnlocker_StripsSingleTrailingLF(t *testing.T) {
 }
 
 func TestExecUnlocker_StripsSingleTrailingCRLF(t *testing.T) {
-	u, _ := New(execCfg(helperArgv("hunter2\r\n", 0)...))
+	u, _ := New(execCfg(helperArgv("hunter2\r\n", 0)...), Hooks{})
 	pp, err := u.Passphrase(context.Background())
 	if err != nil {
 		t.Fatalf("Passphrase: %v", err)
@@ -82,7 +82,7 @@ func TestExecUnlocker_StripsSingleTrailingCRLF(t *testing.T) {
 }
 
 func TestExecUnlocker_PreservesInternalAndLeadingWhitespace(t *testing.T) {
-	u, _ := New(execCfg(helperArgv(" tab\there\n", 0)...))
+	u, _ := New(execCfg(helperArgv(" tab\there\n", 0)...), Hooks{})
 	pp, err := u.Passphrase(context.Background())
 	if err != nil {
 		t.Fatalf("Passphrase: %v", err)
@@ -93,21 +93,21 @@ func TestExecUnlocker_PreservesInternalAndLeadingWhitespace(t *testing.T) {
 }
 
 func TestExecUnlocker_EmptyOutputIsError(t *testing.T) {
-	u, _ := New(execCfg(helperArgv("", 0)...))
+	u, _ := New(execCfg(helperArgv("", 0)...), Hooks{})
 	if _, err := u.Passphrase(context.Background()); err == nil {
 		t.Fatal("expected error for empty stdout, got nil")
 	}
 }
 
 func TestExecUnlocker_NonzeroExitIsError(t *testing.T) {
-	u, _ := New(execCfg(helperArgv("whatever", 7)...))
+	u, _ := New(execCfg(helperArgv("whatever", 7)...), Hooks{})
 	if _, err := u.Passphrase(context.Background()); err == nil {
 		t.Fatal("expected error for nonzero exit, got nil")
 	}
 }
 
 func TestExecUnlocker_EmptyArgvIsError(t *testing.T) {
-	u, err := New(execCfg())
+	u, err := New(execCfg(), Hooks{})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}

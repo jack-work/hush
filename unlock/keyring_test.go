@@ -35,7 +35,7 @@ func TestKeyringUnlocker_RoundTrip(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = keyring.Delete(svc, acct) })
 
-	u, err := New(keyringCfg(svc, acct))
+	u, err := New(keyringCfg(svc, acct), Hooks{})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -49,7 +49,7 @@ func TestKeyringUnlocker_RoundTrip(t *testing.T) {
 }
 
 func TestKeyringUnlocker_MissingEntryWrapsSentinel(t *testing.T) {
-	u, _ := New(keyringCfg("hush-test", "nonexistent"))
+	u, _ := New(keyringCfg("hush-test", "nonexistent"), Hooks{})
 	_, err := u.Passphrase(context.Background())
 	if err == nil {
 		t.Fatal("expected error for missing entry, got nil")
@@ -60,14 +60,14 @@ func TestKeyringUnlocker_MissingEntryWrapsSentinel(t *testing.T) {
 }
 
 func TestKeyringUnlocker_EmptyServiceIsError(t *testing.T) {
-	u, _ := New(keyringCfg("", "default"))
+	u, _ := New(keyringCfg("", "default"), Hooks{})
 	if _, err := u.Passphrase(context.Background()); err == nil {
 		t.Fatal("expected error for empty service, got nil")
 	}
 }
 
 func TestKeyringUnlocker_EmptyAccountIsError(t *testing.T) {
-	u, _ := New(keyringCfg("hush-test", ""))
+	u, _ := New(keyringCfg("hush-test", ""), Hooks{})
 	if _, err := u.Passphrase(context.Background()); err == nil {
 		t.Fatal("expected error for empty account, got nil")
 	}

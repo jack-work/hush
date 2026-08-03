@@ -43,6 +43,20 @@ type Unlocker interface {
 	Passphrase(ctx context.Context) ([]byte, error)
 }
 
+// Hooks let the caller customize backend behavior. The zero value
+// keeps the built-ins.
+type Hooks struct {
+	// Verify, when non-nil, must return nil iff pp decrypts the
+	// identity. Backends that cache (keyring, auto) call it before
+	// trusting or persisting a passphrase: auto never stores an
+	// unverified one, and invalidates + re-prompts when a cached one
+	// stops verifying instead of failing silently on every startup.
+	Verify func(pp []byte) error
+	// Prompt, when non-nil, replaces the built-in TTY prompt so the
+	// consuming application can own the passphrase UX.
+	Prompt func(ctx context.Context) ([]byte, error)
+}
+
 // New constructs an Unlocker from the unlock section of the resolved
 // hush config. An empty Method is treated as "passphrase" (TTY prompt),
 // preserving today's default behavior.
@@ -50,19 +64,24 @@ type Unlocker interface {
 // New does not perform any I/O; backends do their work in Passphrase.
 // This makes it cheap to call from cmd.PersistentPreRun or library code
 // that wants to validate config without actually unlocking.
-func New(cfg config.UnlockConfig) (Unlocker, error) {
+func New(cfg config.UnlockConfig, hooks Hooks) (Unlocker, error) {
 	switch cfg.Method {
 	case "", "auto":
 		return &autoUnlocker{
 			service: cfg.Keyring.Service,
 			account: cfg.Keyring.Account,
+			hooks:   hooks,
 		}, nil
 	case "passphrase":
+		if hooks.Prompt != nil {
+			return promptFunc(hooks.Prompt), nil
+		}
 		return &passphraseUnlocker{}, nil
 	case "keyring":
 		return &keyringUnlocker{
 			service: cfg.Keyring.Service,
 			account: cfg.Keyring.Account,
+			hooks:   hooks,
 		}, nil
 	case "exec":
 		return &execUnlocker{argv: cfg.Exec}, nil
@@ -70,3 +89,7 @@ func New(cfg config.UnlockConfig) (Unlocker, error) {
 		return nil, fmt.Errorf("unknown unlock method %q (valid: auto, passphrase, keyring, exec)", cfg.Method)
 	}
 }
+
+type promptFunc func(ctx context.Context) ([]byte, error)
+
+func (f promptFunc) Passphrase(ctx context.Context) ([]byte, error) { return f(ctx) }

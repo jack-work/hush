@@ -10,8 +10,8 @@ import (
 )
 
 // autoUnlocker is the friction-free default. It tries the OS keyring
-// first; if no entry exists, prompts on TTY, stores the answer in the
-// keyring, returns it. Subsequent invocations are silent.
+// first; if no entry exists, prompts, verifies, stores the answer in
+// the keyring, returns it. Subsequent invocations are silent.
 //
 // If the keyring is unavailable (no Secret Service on Linux, dbus
 // missing, headless box) the backend falls back to a plain TTY prompt
@@ -25,6 +25,7 @@ import (
 type autoUnlocker struct {
 	service string
 	account string
+	hooks   Hooks
 }
 
 func (u *autoUnlocker) Passphrase(ctx context.Context) ([]byte, error) {
@@ -36,8 +37,21 @@ func (u *autoUnlocker) Passphrase(ctx context.Context) ([]byte, error) {
 	v, err := keyring.Get(u.service, u.account)
 	switch {
 	case err == nil && v != "":
+		pp := []byte(v)
+		if u.hooks.Verify != nil {
+			if verr := u.hooks.Verify(pp); verr != nil {
+				// The cached entry no longer decrypts the identity — a bad
+				// write, or a rotated identity. A stale entry would otherwise
+				// fail silently on every startup with no recovery path, so
+				// invalidate it and fall through to the prompt.
+				wipe(pp)
+				_ = keyring.Delete(u.service, u.account)
+				fmt.Fprintf(os.Stderr, "[hush] saved passphrase for %q no longer unlocks the identity (%v) — cleared it, prompting again.\n", u.service, verr)
+				return u.bootstrapViaKeyring(ctx)
+			}
+		}
 		// Cached. Silent path.
-		return []byte(v), nil
+		return pp, nil
 
 	case errors.Is(err, keyring.ErrNotFound):
 		// Keyring is reachable but has no entry yet. Prompt once,
@@ -46,20 +60,36 @@ func (u *autoUnlocker) Passphrase(ctx context.Context) ([]byte, error) {
 
 	default:
 		// Other keyring errors (no provider, dbus broken, etc.) ->
-		// TTY-only fallback with a single hint.
+		// prompt-only fallback with a single hint.
 		printKeyringUnavailableOnce(err)
-		return (&passphraseUnlocker{}).Passphrase(ctx)
+		return u.prompt(ctx)
 	}
 }
 
-// bootstrapViaKeyring prompts the user for a passphrase on TTY, stores
-// it in the keyring, and returns it. Used on first-run when the
-// keyring is reachable but empty.
+func (u *autoUnlocker) prompt(ctx context.Context) ([]byte, error) {
+	if u.hooks.Prompt != nil {
+		return u.hooks.Prompt(ctx)
+	}
+	return (&passphraseUnlocker{}).Passphrase(ctx)
+}
+
+// bootstrapViaKeyring prompts the user for a passphrase, verifies it
+// against the identity, stores it in the keyring, and returns it. Used
+// on first-run when the keyring is reachable but empty, and after a
+// stale entry has been invalidated. An unverified passphrase is never
+// persisted: a stray byte read off an unattended terminal must not
+// clobber a good entry.
 func (u *autoUnlocker) bootstrapViaKeyring(ctx context.Context) ([]byte, error) {
 	fmt.Fprintf(os.Stderr, "[hush] no passphrase saved for %q yet — prompting once, then saving to your OS keyring.\n", u.service)
-	pp, err := (&passphraseUnlocker{}).Passphrase(ctx)
+	pp, err := u.prompt(ctx)
 	if err != nil {
 		return nil, err
+	}
+	if u.hooks.Verify != nil {
+		if verr := u.hooks.Verify(pp); verr != nil {
+			wipe(pp)
+			return nil, fmt.Errorf("passphrase does not decrypt the identity — not saving to keyring: %w", verr)
+		}
 	}
 	if err := keyring.Set(u.service, u.account, string(pp)); err != nil {
 		// Don't fail the unlock just because the cache write failed —
@@ -67,7 +97,7 @@ func (u *autoUnlocker) bootstrapViaKeyring(ctx context.Context) ([]byte, error) 
 		fmt.Fprintf(os.Stderr, "[hush] warning: couldn't save passphrase to keyring (%v). You'll be prompted again next startup.\n", err)
 		return pp, nil
 	}
-	fmt.Fprintf(os.Stderr, "[hush] saved to keyring — future startups will be silent.\n")
+	fmt.Fprintln(os.Stderr, "[hush] saved to keyring — future startups will be silent.")
 	return pp, nil
 }
 
@@ -83,4 +113,10 @@ func printKeyringUnavailableOnce(err error) {
 	keyringUnavailableHinted = true
 	fmt.Fprintf(os.Stderr, "[hush] no OS keyring available (%v). You'll be prompted for the passphrase on each startup.\n", err)
 	fmt.Fprintln(os.Stderr, "[hush] To fix on Linux: install gnome-keyring or KWallet. Or set unlock.method = \"exec\" in hush.toml to use `pass`/`rbw`/etc.")
+}
+
+func wipe(b []byte) {
+	for i := range b {
+		b[i] = 0
+	}
 }

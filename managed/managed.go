@@ -409,6 +409,16 @@ func (h *Hush) startExternal() error {
 	return nil
 }
 
+// verifyPassphrase reports whether pp decrypts the on-disk identity,
+// without retaining the key material.
+func (h *Hush) verifyPassphrase(pp []byte) error {
+	id, err := identity.Unlock(h.cfg.IdentityFile, pp)
+	if err == nil {
+		id.Zero()
+	}
+	return err
+}
+
 func (h *Hush) startEmbedded() error {
 	var passphrase []byte
 	var err error
@@ -424,7 +434,15 @@ func (h *Hush) startEmbedded() error {
 		}
 	} else {
 		// Returning user: resolve via the configured unlock backend.
-		u, uerr := unlock.New(h.cfg.Unlock)
+		// Verify gates keyring persistence on actual decryption, and
+		// PromptPassphrase keeps the consumer in charge of any prompt.
+		hooks := unlock.Hooks{Verify: h.verifyPassphrase}
+		if h.opts.PromptPassphrase != nil {
+			hooks.Prompt = func(context.Context) ([]byte, error) {
+				return h.opts.PromptPassphrase()
+			}
+		}
+		u, uerr := unlock.New(h.cfg.Unlock, hooks)
 		if uerr != nil {
 			return uerr
 		}

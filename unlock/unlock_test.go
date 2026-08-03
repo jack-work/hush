@@ -7,7 +7,7 @@ import (
 )
 
 func TestNew_DefaultsToAuto(t *testing.T) {
-	u, err := New(config.UnlockConfig{Keyring: config.KeyringConfig{Service: "svc", Account: "acct"}})
+	u, err := New(config.UnlockConfig{Keyring: config.KeyringConfig{Service: "svc", Account: "acct"}}, Hooks{})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -17,7 +17,7 @@ func TestNew_DefaultsToAuto(t *testing.T) {
 }
 
 func TestNew_ExplicitPassphrase(t *testing.T) {
-	u, err := New(config.UnlockConfig{Method: "passphrase"})
+	u, err := New(config.UnlockConfig{Method: "passphrase"}, Hooks{})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -27,7 +27,7 @@ func TestNew_ExplicitPassphrase(t *testing.T) {
 }
 
 func TestNew_UnknownMethod(t *testing.T) {
-	_, err := New(config.UnlockConfig{Method: "telepathy"})
+	_, err := New(config.UnlockConfig{Method: "telepathy"}, Hooks{})
 	if err == nil {
 		t.Fatal("expected error for unknown method, got nil")
 	}

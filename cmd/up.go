@@ -77,8 +77,18 @@ func runUp(cmd *cobra.Command, args []string) error {
 func promptAndUnlock(identityFile string) (*identity.DecryptedIdentity, error) {
 	// Build the resolver from the active config. Method defaults to
 	// "passphrase" (TTY prompt) when nothing is set in hush.toml, so
-	// behavior is identical to before this seam existed.
-	u, err := unlock.New(cfg.Unlock)
+	// behavior is identical to before this seam existed. Verify keeps
+	// caching backends from trusting or persisting a passphrase that
+	// doesn't decrypt the identity.
+	u, err := unlock.New(cfg.Unlock, unlock.Hooks{
+		Verify: func(pp []byte) error {
+			id, err := identity.Unlock(identityFile, pp)
+			if err == nil {
+				id.Zero()
+			}
+			return err
+		},
+	})
 	if err != nil {
 		return nil, err
 	}

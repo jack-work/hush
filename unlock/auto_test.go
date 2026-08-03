@@ -2,6 +2,7 @@ package unlock
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/zalando/go-keyring"
@@ -26,7 +27,7 @@ func TestAutoUnlocker_KeyringHitIsSilent(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = keyring.Delete(svc, acct) })
 
-	u, err := New(autoCfg(svc, acct))
+	u, err := New(autoCfg(svc, acct), Hooks{})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -40,20 +41,94 @@ func TestAutoUnlocker_KeyringHitIsSilent(t *testing.T) {
 }
 
 func TestAutoUnlocker_EmptyServiceErrors(t *testing.T) {
-	u, _ := New(autoCfg("", "default"))
+	u, _ := New(autoCfg("", "default"), Hooks{})
 	if _, err := u.Passphrase(context.Background()); err == nil {
 		t.Fatal("expected error for empty service")
 	}
 }
 
 func TestAutoUnlocker_EmptyAccountErrors(t *testing.T) {
-	u, _ := New(autoCfg("svc", ""))
+	u, _ := New(autoCfg("svc", ""), Hooks{})
 	if _, err := u.Passphrase(context.Background()); err == nil {
 		t.Fatal("expected error for empty account")
 	}
 }
 
-// We can't easily exercise the "miss → prompt → store" path in a unit
-// test because the inner TTY prompt is gated by term.IsTerminal. The
-// path is covered manually via `hush up` in a clean dev shell. The
-// inverse — keyring unreachable → TTY fallback — is similarly TTY-gated.
+// verifyOnly accepts exactly one passphrase.
+func verifyOnly(want string) func([]byte) error {
+	return func(pp []byte) error {
+		if string(pp) != want {
+			return errors.New("incorrect passphrase")
+		}
+		return nil
+	}
+}
+
+func promptWith(pp string) func(context.Context) ([]byte, error) {
+	return func(context.Context) ([]byte, error) { return []byte(pp), nil }
+}
+
+func TestAutoUnlocker_MissPromptsVerifiesStores(t *testing.T) {
+	const svc, acct = "hush-auto-test-miss", "default"
+	_ = keyring.Delete(svc, acct)
+	t.Cleanup(func() { _ = keyring.Delete(svc, acct) })
+
+	u, _ := New(autoCfg(svc, acct), Hooks{
+		Verify: verifyOnly("good"),
+		Prompt: promptWith("good"),
+	})
+	got, err := u.Passphrase(context.Background())
+	if err != nil {
+		t.Fatalf("Passphrase: %v", err)
+	}
+	if string(got) != "good" {
+		t.Fatalf("got %q, want %q", got, "good")
+	}
+	if v, err := keyring.Get(svc, acct); err != nil || v != "good" {
+		t.Fatalf("keyring after store: %q, %v", v, err)
+	}
+}
+
+func TestAutoUnlocker_UnverifiedPromptIsNotPersisted(t *testing.T) {
+	const svc, acct = "hush-auto-test-junk", "default"
+	_ = keyring.Delete(svc, acct)
+	t.Cleanup(func() { _ = keyring.Delete(svc, acct) })
+
+	u, _ := New(autoCfg(svc, acct), Hooks{
+		Verify: verifyOnly("good"),
+		Prompt: promptWith("j"), // a stray byte off an unattended terminal
+	})
+	if _, err := u.Passphrase(context.Background()); err == nil {
+		t.Fatal("expected error for unverifiable passphrase")
+	}
+	if _, err := keyring.Get(svc, acct); !errors.Is(err, keyring.ErrNotFound) {
+		t.Fatalf("junk was persisted to the keyring: %v", err)
+	}
+}
+
+func TestAutoUnlocker_StaleEntryInvalidatedAndReprompted(t *testing.T) {
+	const svc, acct = "hush-auto-test-stale", "default"
+	if err := keyring.Set(svc, acct, "j"); err != nil {
+		t.Fatalf("seed keyring: %v", err)
+	}
+	t.Cleanup(func() { _ = keyring.Delete(svc, acct) })
+
+	u, _ := New(autoCfg(svc, acct), Hooks{
+		Verify: verifyOnly("good"),
+		Prompt: promptWith("good"),
+	})
+	got, err := u.Passphrase(context.Background())
+	if err != nil {
+		t.Fatalf("Passphrase: %v", err)
+	}
+	if string(got) != "good" {
+		t.Fatalf("got %q, want %q", got, "good")
+	}
+	if v, err := keyring.Get(svc, acct); err != nil || v != "good" {
+		t.Fatalf("keyring after heal: %q, %v", v, err)
+	}
+}
+
+// The built-in TTY prompt and the keyring-unreachable fallback remain
+// gated by term.IsTerminal; those are covered manually via `hush up`
+// in a clean dev shell.

@@ -38,6 +38,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"golang.org/x/term"
@@ -286,6 +287,33 @@ func (h *Hush) Init(passphrase []byte) (publicKey string, err error) {
 	return initIdentity(h.cfg, passphrase)
 }
 
+// KeyringTarget returns the resolved (service, account) pair the unlock
+// backends read and write. Consumers managing the entry must ask rather
+// than re-derive: embedded mode scopes the service to AppName.
+func (h *Hush) KeyringTarget() (service, account string) {
+	if h.cfg == nil {
+		return "", ""
+	}
+	return h.cfg.Unlock.Keyring.Service, h.cfg.Unlock.Keyring.Account
+}
+
+// IdentityFile returns the path to the encrypted age identity.
+func (h *Hush) IdentityFile() string {
+	if h.cfg == nil {
+		return ""
+	}
+	return h.cfg.IdentityFile
+}
+
+// PublicKey returns the age recipient written beside the identity.
+func (h *Hush) PublicKey() (string, error) {
+	b, err := os.ReadFile(h.IdentityFile() + ".pub")
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(string(b)), nil
+}
+
 // HasIdentity reports whether an identity file exists at the configured path.
 func (h *Hush) HasIdentity() bool {
 	_, err := os.Stat(h.cfg.IdentityFile)
@@ -409,9 +437,9 @@ func (h *Hush) startExternal() error {
 	return nil
 }
 
-// verifyPassphrase reports whether pp decrypts the on-disk identity,
-// without retaining the key material.
-func (h *Hush) verifyPassphrase(pp []byte) error {
+// VerifyPassphrase reports whether pp decrypts the on-disk identity,
+// without retaining the key material. The buffer is left intact.
+func (h *Hush) VerifyPassphrase(pp []byte) error {
 	id, err := identity.Unlock(h.cfg.IdentityFile, pp)
 	if err == nil {
 		id.Zero()
@@ -436,7 +464,7 @@ func (h *Hush) startEmbedded() error {
 		// Returning user: resolve via the configured unlock backend.
 		// Verify gates keyring persistence on actual decryption, and
 		// PromptPassphrase keeps the consumer in charge of any prompt.
-		hooks := unlock.Hooks{Verify: h.verifyPassphrase}
+		hooks := unlock.Hooks{Verify: h.VerifyPassphrase}
 		if h.opts.PromptPassphrase != nil {
 			hooks.Prompt = func(context.Context) ([]byte, error) {
 				return h.opts.PromptPassphrase()

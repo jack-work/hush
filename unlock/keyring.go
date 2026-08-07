@@ -53,15 +53,13 @@ func (u *keyringUnlocker) Passphrase(_ context.Context) ([]byte, error) {
 	// go-keyring returns a string; the underlying bytes are immutable
 	// to us. Copy to a slice the caller can wipe.
 	pp := []byte(v)
-	if u.hooks.Verify != nil {
-		if verr := u.hooks.Verify(pp); verr != nil {
-			// Explicit keyring method: the entry is user-managed, so
-			// point at the recovery path rather than self-healing.
-			wipe(pp)
-			return nil, fmt.Errorf(
-				"keyring passphrase (service=%q account=%q) does not decrypt the identity: %w (re-seed it with `hush keyring set`)",
-				u.service, u.account, verr)
-		}
+	if verr := u.hooks.verify(pp); verr != nil {
+		// Explicit keyring method: the entry is user-managed, so
+		// point at the recovery path rather than self-healing.
+		wipe(pp)
+		return nil, fmt.Errorf(
+			"keyring passphrase (service=%q account=%q) does not decrypt the identity: %w (re-seed it with `hush keyring set`)",
+			u.service, u.account, verr)
 	}
 	return pp, nil
 }

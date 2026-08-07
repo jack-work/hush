@@ -38,17 +38,15 @@ func (u *autoUnlocker) Passphrase(ctx context.Context) ([]byte, error) {
 	switch {
 	case err == nil && v != "":
 		pp := []byte(v)
-		if u.hooks.Verify != nil {
-			if verr := u.hooks.Verify(pp); verr != nil {
-				// The cached entry no longer decrypts the identity — a bad
-				// write, or a rotated identity. A stale entry would otherwise
-				// fail silently on every startup with no recovery path, so
-				// invalidate it and fall through to the prompt.
-				wipe(pp)
-				_ = keyring.Delete(u.service, u.account)
-				fmt.Fprintf(os.Stderr, "[hush] saved passphrase for %q no longer unlocks the identity (%v) — cleared it, prompting again.\n", u.service, verr)
-				return u.bootstrapViaKeyring(ctx)
-			}
+		if verr := u.hooks.verify(pp); verr != nil {
+			// The cached entry no longer decrypts the identity — a bad
+			// write, or a rotated identity. A stale entry would otherwise
+			// fail silently on every startup with no recovery path, so
+			// invalidate it and fall through to the prompt.
+			wipe(pp)
+			_ = keyring.Delete(u.service, u.account)
+			fmt.Fprintf(os.Stderr, "[hush] saved passphrase for %q no longer unlocks the identity (%v) — cleared it, prompting again.\n", u.service, verr)
+			return u.bootstrapViaKeyring(ctx)
 		}
 		// Cached. Silent path.
 		return pp, nil
@@ -85,11 +83,9 @@ func (u *autoUnlocker) bootstrapViaKeyring(ctx context.Context) ([]byte, error) 
 	if err != nil {
 		return nil, err
 	}
-	if u.hooks.Verify != nil {
-		if verr := u.hooks.Verify(pp); verr != nil {
-			wipe(pp)
-			return nil, fmt.Errorf("passphrase does not decrypt the identity — not saving to keyring: %w", verr)
-		}
+	if verr := u.hooks.verify(pp); verr != nil {
+		wipe(pp)
+		return nil, fmt.Errorf("passphrase does not decrypt the identity — not saving to keyring: %w", verr)
 	}
 	if err := keyring.Set(u.service, u.account, string(pp)); err != nil {
 		// Don't fail the unlock just because the cache write failed —

@@ -51,6 +51,11 @@ type Hooks struct {
 	// trusting or persisting a passphrase: auto never stores an
 	// unverified one, and invalidates + re-prompts when a cached one
 	// stops verifying instead of failing silently on every startup.
+	//
+	// The hook is handed a private copy and may consume it. That is
+	// not a courtesy: identity.Unlock — the canonical implementation —
+	// zeroes the passphrase it is given, so verifying in place would
+	// hand the caller (and the keyring) a buffer of NUL bytes.
 	Verify func(pp []byte) error
 	// Prompt, when non-nil, replaces the built-in TTY prompt so the
 	// consuming application can own the passphrase UX.
@@ -88,6 +93,18 @@ func New(cfg config.UnlockConfig, hooks Hooks) (Unlocker, error) {
 	default:
 		return nil, fmt.Errorf("unknown unlock method %q (valid: auto, passphrase, keyring, exec)", cfg.Method)
 	}
+}
+
+// verify runs the Verify hook against a private copy of pp, so a
+// destructive implementation cannot corrupt the passphrase the backend
+// is about to return or persist. No hook means nothing to verify.
+func (h Hooks) verify(pp []byte) error {
+	if h.Verify == nil {
+		return nil
+	}
+	cp := append([]byte(nil), pp...)
+	defer wipe(cp)
+	return h.Verify(cp)
 }
 
 type promptFunc func(ctx context.Context) ([]byte, error)

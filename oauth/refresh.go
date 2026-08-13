@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 )
@@ -76,24 +77,28 @@ func (m *Manager) doRefresh(st *configState) (string, error) {
 	return resultTok, err
 }
 
-// refreshHTTP makes the token-endpoint POST.
+// refreshHTTP makes the token-endpoint POST. RFC 6749 §4.5 mandates
+// application/x-www-form-urlencoded; some providers (Anthropic) happen
+// to accept JSON too, but the canonical spec-compliant form works for
+// everyone including strict implementations like Authelia's OIDC.
 func (m *Manager) refreshHTTP(st *configState) (Tokens, error) {
 	p := st.tokens.Load()
 	if p == nil {
 		return Tokens{}, ErrNotFound
 	}
 
-	bodyBytes, _ := json.Marshal(map[string]string{
-		"grant_type":    "refresh_token",
-		"client_id":     st.cfg.ClientID,
-		"refresh_token": p.refresh,
-	})
+	form := url.Values{
+		"grant_type":    {"refresh_token"},
+		"client_id":     {st.cfg.ClientID},
+		"refresh_token": {p.refresh},
+	}
 
-	req, err := http.NewRequestWithContext(m.ctx, "POST", st.cfg.TokenURL, strings.NewReader(string(bodyBytes)))
+	req, err := http.NewRequestWithContext(m.ctx, "POST", st.cfg.TokenURL, strings.NewReader(form.Encode()))
 	if err != nil {
 		return Tokens{}, fmt.Errorf("%w: build request: %v", ErrRefreshTransient, err)
 	}
-	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Accept", "application/json")
 
 	resp, err := m.httpClient.Do(req)
 	if err != nil {

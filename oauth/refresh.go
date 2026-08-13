@@ -35,14 +35,31 @@ func (m *Manager) doRefresh(st *configState) (string, error) {
 	st.flight = op
 	st.mu.Unlock()
 
-	tok, err := m.refreshHTTP(st)
-	if err == nil {
-		expiresAt := time.Now().Add(time.Duration(tok.ExpiresIn) * time.Second).Add(-safetyWindow)
-		newTok := plaintextTokens{
-			access:    tok.AccessToken,
-			refresh:   tok.RefreshToken,
-			expiresAt: expiresAt,
+	cur := st.tokens.Load()
+	tok, err := m.refreshHTTP(st, currentRefresh(cur))
+	if errors.Is(err, ErrRefreshPermanent) {
+		// A permanent rejection usually means our refresh token was
+		// rotated away by another process whose success is already on
+		// disk. Adopt the newer disk state instead of failing.
+		if disk, ok := m.newerOnDisk(st); ok {
+			m.logger.Printf("oauth: %s refresh rejected; adopting newer tokens from disk (rotated by another process)", st.cfg.Name)
+			st.tokens.Store(&disk)
+			m.finish(op, st, disk.access, nil)
+			return disk.access, nil
 		}
+		// Otherwise our token may be one rotation ahead of what the
+		// provider knows: a response we received but never persisted.
+		// The predecessor is the only other candidate — try it once.
+		if prev := previousRefresh(cur); prev != "" {
+			m.logger.Printf("oauth: %s refresh rejected; retrying with the previous refresh token", st.cfg.Name)
+			if prevTok, prevErr := m.refreshHTTP(st, prev); prevErr == nil {
+				tok, err = prevTok, nil
+			}
+		}
+	}
+
+	if err == nil {
+		newTok := newTokenState(tok, currentRefresh(cur), time.Now())
 		// Persist first; only update memory if the write succeeded so a
 		// crash mid-refresh can't lose the new refresh token.
 		if perr := m.saveFile(st.cfg, newTok); perr != nil {
@@ -50,47 +67,55 @@ func (m *Manager) doRefresh(st *configState) (string, error) {
 		} else {
 			st.tokens.Store(&newTok)
 		}
-	} else if errors.Is(err, ErrRefreshPermanent) {
-		// A permanent rejection usually means our refresh token was
-		// rotated away by another process whose success is already on
-		// disk. Adopt the newer disk state instead of failing.
-		if disk, ok := m.newerOnDisk(st); ok {
-			m.logger.Printf("oauth: %s refresh rejected; adopting newer tokens from disk (rotated by another process)", st.cfg.Name)
-			st.tokens.Store(&disk)
-			tok = Tokens{AccessToken: disk.access}
-			err = nil
-		}
 	}
 
 	var resultTok string
 	if err == nil {
 		resultTok = tok.AccessToken
 	}
+	m.finish(op, st, resultTok, err)
+	return resultTok, err
+}
 
+// finish publishes the outcome to any callers coalesced onto op and clears
+// the in-flight slot.
+func (m *Manager) finish(op *refreshOp, st *configState, result string, err error) {
 	st.mu.Lock()
-	op.result = resultTok
+	op.result = result
 	op.err = err
 	close(op.done)
 	st.flight = nil
 	st.mu.Unlock()
+}
 
-	return resultTok, err
+// currentRefresh and previousRefresh read a possibly-nil cached state.
+func currentRefresh(p *plaintextTokens) string {
+	if p == nil {
+		return ""
+	}
+	return p.refresh
+}
+
+func previousRefresh(p *plaintextTokens) string {
+	if p == nil {
+		return ""
+	}
+	return p.prevRefresh
 }
 
 // refreshHTTP makes the token-endpoint POST. RFC 6749 §4.5 mandates
 // application/x-www-form-urlencoded; some providers (Anthropic) happen
 // to accept JSON too, but the canonical spec-compliant form works for
 // everyone including strict implementations like Authelia's OIDC.
-func (m *Manager) refreshHTTP(st *configState) (Tokens, error) {
-	p := st.tokens.Load()
-	if p == nil {
+func (m *Manager) refreshHTTP(st *configState, refreshToken string) (Tokens, error) {
+	if refreshToken == "" {
 		return Tokens{}, ErrNotFound
 	}
 
 	form := url.Values{
 		"grant_type":    {"refresh_token"},
 		"client_id":     {st.cfg.ClientID},
-		"refresh_token": {p.refresh},
+		"refresh_token": {refreshToken},
 	}
 
 	req, err := http.NewRequestWithContext(m.ctx, "POST", st.cfg.TokenURL, strings.NewReader(form.Encode()))
@@ -129,7 +154,7 @@ func (m *Manager) refreshHTTP(st *configState) (Tokens, error) {
 	}
 	// Some providers omit refresh_token on refresh (no rotation). Keep the old one.
 	if parsed.RefreshToken == "" {
-		parsed.RefreshToken = p.refresh
+		parsed.RefreshToken = refreshToken
 	}
 	return Tokens{
 		AccessToken:  parsed.AccessToken,

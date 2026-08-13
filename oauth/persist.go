@@ -23,7 +23,12 @@ type tomlForm struct {
 	Scopes       string `toml:"scopes"`
 	AccessToken  string `toml:"access_token"`
 	RefreshToken string `toml:"refresh_token"`
-	ExpiresAt    int64  `toml:"expires_at"`
+	// RefreshTokenPrev is the predecessor of RefreshToken, kept so a
+	// rotation lost between the token response and this file can be
+	// retried once instead of forcing a full re-login.
+	RefreshTokenPrev string `toml:"refresh_token_prev,omitempty"`
+	IssuedAt         int64  `toml:"issued_at,omitempty"`
+	ExpiresAt        int64  `toml:"expires_at"`
 }
 
 func (m *Manager) oauthDir() string {
@@ -59,6 +64,14 @@ func (m *Manager) loadFile(path string) (Config, plaintextTokens, error) {
 	if err != nil {
 		return Config{}, plaintextTokens{}, fmt.Errorf("decrypt refresh_token: %w", err)
 	}
+	var prevRefresh string
+	if raw.RefreshTokenPrev != "" {
+		// A predecessor we cannot decrypt is not worth failing the load
+		// over; it is only a fallback.
+		if v, err := secrets.DecryptValue(raw.RefreshTokenPrev, m.identities); err == nil {
+			prevRefresh = v
+		}
+	}
 
 	name := stripTOMLExt(filepath.Base(path))
 	cfg := Config{
@@ -70,9 +83,13 @@ func (m *Manager) loadFile(path string) (Config, plaintextTokens, error) {
 		Scopes:       raw.Scopes,
 	}
 	tok := plaintextTokens{
-		access:    access,
-		refresh:   refresh,
-		expiresAt: time.UnixMilli(raw.ExpiresAt),
+		access:      access,
+		refresh:     refresh,
+		prevRefresh: prevRefresh,
+		expiresAt:   time.UnixMilli(raw.ExpiresAt),
+	}
+	if raw.IssuedAt != 0 {
+		tok.issuedAt = time.UnixMilli(raw.IssuedAt)
 	}
 	return cfg, tok, nil
 }
@@ -88,16 +105,27 @@ func (m *Manager) saveFile(cfg Config, tok plaintextTokens) error {
 	if err != nil {
 		return fmt.Errorf("encrypt refresh_token: %w", err)
 	}
+	var encPrevRefresh string
+	if tok.prevRefresh != "" {
+		encPrevRefresh, err = secrets.EncryptValue(tok.prevRefresh, m.recipient)
+		if err != nil {
+			return fmt.Errorf("encrypt refresh_token_prev: %w", err)
+		}
+	}
 
 	form := tomlForm{
-		AuthorizeURL: cfg.AuthorizeURL,
-		TokenURL:     cfg.TokenURL,
-		RedirectURI:  cfg.RedirectURI,
-		ClientID:     cfg.ClientID,
-		Scopes:       cfg.Scopes,
-		AccessToken:  encAccess,
-		RefreshToken: encRefresh,
-		ExpiresAt:    tok.expiresAt.UnixMilli(),
+		AuthorizeURL:     cfg.AuthorizeURL,
+		TokenURL:         cfg.TokenURL,
+		RedirectURI:      cfg.RedirectURI,
+		ClientID:         cfg.ClientID,
+		Scopes:           cfg.Scopes,
+		AccessToken:      encAccess,
+		RefreshToken:     encRefresh,
+		RefreshTokenPrev: encPrevRefresh,
+		ExpiresAt:        tok.expiresAt.UnixMilli(),
+	}
+	if !tok.issuedAt.IsZero() {
+		form.IssuedAt = tok.issuedAt.UnixMilli()
 	}
 
 	var buf bytes.Buffer

@@ -5,6 +5,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 	"testing"
@@ -121,5 +122,106 @@ func TestRefreshSuccessRotatesDisk(t *testing.T) {
 	}
 	if got, err := reader.Get("prov"); err != nil || got != "A2" {
 		t.Fatalf("disk state after refresh: got %q, %v; want A2", got, err)
+	}
+}
+
+// tokenAwareDoer answers per refresh_token: accepted tokens get a fresh
+// pair, everything else is rejected the way Authelia rejects a token it has
+// no record of.
+type tokenAwareDoer struct {
+	accept map[string]string // refresh token -> JSON response
+	seen   []string
+}
+
+func (d *tokenAwareDoer) Do(req *http.Request) (*http.Response, error) {
+	body, _ := io.ReadAll(req.Body)
+	form, _ := url.ParseQuery(string(body))
+	sent := form.Get("refresh_token")
+	d.seen = append(d.seen, sent)
+
+	if resp, ok := d.accept[sent]; ok {
+		return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(resp))}, nil
+	}
+	return &http.Response{
+		StatusCode: 400,
+		Body: io.NopCloser(strings.NewReader(
+			`{"error":"invalid_grant","error_description":"The refresh token has not been found"}`)),
+	}, nil
+}
+
+// TestRefreshFallsBackToPreviousToken covers the failure that cost a
+// device-code re-login: hush received a rotated refresh token, the process
+// died before persisting it, and the provider had already invalidated the
+// predecessor we still hold... except the provider actually only knows the
+// *predecessor*, because our unpersisted successor never got used. Retrying
+// once with the predecessor recovers the chain instead of demanding a login.
+func TestRefreshFallsBackToPreviousToken(t *testing.T) {
+	dir, key := t.TempDir(), newTestKey(t)
+	m := newTestManager(t, dir, key)
+
+	if err := m.Register(testCfg, Tokens{AccessToken: "A1", RefreshToken: "R_lost", ExpiresIn: 600}); err != nil {
+		t.Fatalf("register: %v", err)
+	}
+	// Simulate the state after a lost write: memory holds R_lost, whose
+	// predecessor R_good is the one the provider still honours.
+	st := m.lookup(testCfg.Name)
+	cur := st.tokens.Load()
+	recovered := *cur
+	recovered.prevRefresh = "R_good"
+	st.tokens.Store(&recovered)
+
+	doer := &tokenAwareDoer{accept: map[string]string{
+		"R_good": `{"access_token":"A2","refresh_token":"R2","expires_in":600}`,
+	}}
+	m.httpClient = doer
+
+	got, err := m.Refresh(testCfg.Name)
+	if err != nil {
+		t.Fatalf("refresh: %v", err)
+	}
+	if got != "A2" {
+		t.Fatalf("access token = %q, want A2", got)
+	}
+	if len(doer.seen) != 2 || doer.seen[0] != "R_lost" || doer.seen[1] != "R_good" {
+		t.Fatalf("token attempts = %v, want [R_lost R_good]", doer.seen)
+	}
+
+	// The recovered pair must be on disk, with R_good retained as the new
+	// predecessor so a second lost write is also survivable.
+	_, disk, err := m.loadFile(m.filePath(testCfg.Name))
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if disk.refresh != "R2" || disk.access != "A2" {
+		t.Fatalf("persisted %q/%q, want A2/R2", disk.access, disk.refresh)
+	}
+	if disk.prevRefresh != "R_lost" {
+		t.Fatalf("persisted predecessor = %q, want R_lost", disk.prevRefresh)
+	}
+}
+
+// TestRefreshGivesUpWhenBothTokensAreDead keeps the fallback honest: when
+// neither token works there is nothing to do but ask for a re-login.
+func TestRefreshGivesUpWhenBothTokensAreDead(t *testing.T) {
+	dir, key := t.TempDir(), newTestKey(t)
+	m := newTestManager(t, dir, key)
+
+	if err := m.Register(testCfg, Tokens{AccessToken: "A1", RefreshToken: "R1", ExpiresIn: 600}); err != nil {
+		t.Fatalf("register: %v", err)
+	}
+	st := m.lookup(testCfg.Name)
+	cur := st.tokens.Load()
+	dead := *cur
+	dead.prevRefresh = "R0"
+	st.tokens.Store(&dead)
+
+	doer := &tokenAwareDoer{accept: map[string]string{}}
+	m.httpClient = doer
+
+	if _, err := m.Refresh(testCfg.Name); !errors.Is(err, ErrRefreshPermanent) {
+		t.Fatalf("err = %v, want ErrRefreshPermanent", err)
+	}
+	if len(doer.seen) != 2 {
+		t.Fatalf("attempts = %v, want both tokens tried once", doer.seen)
 	}
 }

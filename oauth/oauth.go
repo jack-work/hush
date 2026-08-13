@@ -43,30 +43,94 @@ type Tokens struct {
 // Errors surfaced to clients. The agent maps these to Response.ErrorCode so
 // figaro (and other callers) can branch without string matching.
 var (
-	ErrNotFound          = errors.New("oauth: config not registered")
-	ErrRefreshPermanent  = errors.New("oauth: refresh failed permanently (re-login required)")
-	ErrRefreshTransient  = errors.New("oauth: refresh failed transiently")
+	ErrNotFound         = errors.New("oauth: config not registered")
+	ErrRefreshPermanent = errors.New("oauth: refresh failed permanently (re-login required)")
+	ErrRefreshTransient = errors.New("oauth: refresh failed transiently")
 )
 
 const (
-	// safetyWindow is subtracted from the provider's expires_in when computing
-	// the absolute expiry. Matches the figaro behavior pre-refactor.
-	safetyWindow = 5 * time.Minute
+	// refreshFraction is how much of a token's lifetime elapses before the
+	// proactive loop renews it. Everything here is *relative to the actual
+	// lifetime* the provider handed us, which is the whole point: a fixed
+	// window (the old proactiveWindow = 10m) is catastrophic against a
+	// provider that issues short tokens. Authelia's default access token
+	// lives 10 minutes, so "refresh 10 minutes before expiry" meant "refresh
+	// immediately, forever" — one rotation per second, ~2000 per hour per
+	// client, until some crash lost a write and the chain snapped.
+	refreshFraction = 0.7
 
-	// proactiveWindow is how far before expiry the background goroutine
-	// kicks off a refresh.
-	proactiveWindow = 10 * time.Minute
+	// minRefreshInterval is the floor on the proactive loop's sleep. It is a
+	// guard rail against exactly the runaway above: no arithmetic mistake,
+	// clock jump, or provider returning expires_in=0 can cost more than one
+	// refresh per minute.
+	minRefreshInterval = 1 * time.Minute
 
-	// minProactiveSleep keeps the background loop from spinning on
-	// already-expired or near-expired tokens.
-	minProactiveSleep = 1 * time.Second
+	// maxRefreshInterval caps the sleep so a very long-lived token still gets
+	// exercised occasionally — a refresh that has silently started failing is
+	// better discovered while the current token is valid.
+	maxRefreshInterval = 6 * time.Hour
+
+	// defaultLifetime is assumed when the provider omits expires_in.
+	defaultLifetime = 1 * time.Hour
 )
 
 // plaintextTokens is the cached, decrypted state for a single config.
 type plaintextTokens struct {
-	access    string
-	refresh   string
+	access  string
+	refresh string
+
+	// prevRefresh is the refresh token this one replaced. Providers that
+	// rotate on every refresh (Authelia) leave no way to recover if the new
+	// token is lost between the HTTP response and the disk write, so we keep
+	// the immediate predecessor as a one-step fallback.
+	prevRefresh string
+
+	issuedAt  time.Time
 	expiresAt time.Time
+}
+
+// newTokenState builds the cached state for a freshly minted token pair.
+// The single place where lifetime arithmetic happens.
+func newTokenState(tok Tokens, prevRefresh string, now time.Time) plaintextTokens {
+	lifetime := time.Duration(tok.ExpiresIn) * time.Second
+	if lifetime <= 0 {
+		lifetime = defaultLifetime
+	}
+	return plaintextTokens{
+		access:      tok.AccessToken,
+		refresh:     tok.RefreshToken,
+		prevRefresh: prevRefresh,
+		issuedAt:    now,
+		expiresAt:   now.Add(lifetime),
+	}
+}
+
+// refreshAt reports when the proactive loop should renew this token:
+// refreshFraction of the way through its lifetime. Tokens loaded from a
+// file written by an older hush have no issued_at, so their remaining
+// lifetime stands in for the whole.
+func (p plaintextTokens) refreshAt(now time.Time) time.Time {
+	start, lifetime := p.issuedAt, p.expiresAt.Sub(p.issuedAt)
+	if start.IsZero() || lifetime <= 0 {
+		start, lifetime = now, p.expiresAt.Sub(now)
+	}
+	if lifetime <= 0 {
+		return now
+	}
+	return start.Add(time.Duration(float64(lifetime) * refreshFraction))
+}
+
+// proactiveWait is how long the background loop sleeps before renewing p,
+// clamped to [minRefreshInterval, maxRefreshInterval].
+func proactiveWait(p plaintextTokens, now time.Time) time.Duration {
+	wait := p.refreshAt(now).Sub(now)
+	if wait < minRefreshInterval {
+		return minRefreshInterval
+	}
+	if wait > maxRefreshInterval {
+		return maxRefreshInterval
+	}
+	return wait
 }
 
 // configState holds the in-memory state for one OAuth config.
@@ -183,21 +247,13 @@ func (m *Manager) Register(cfg Config, tok Tokens) error {
 		return errors.New("oauth: access and refresh tokens are both required")
 	}
 
-	expiresAt := time.Now().Add(time.Duration(tok.ExpiresIn) * time.Second).Add(-safetyWindow)
+	state := newTokenState(tok, "", time.Now())
 
-	if err := m.saveFile(cfg, plaintextTokens{
-		access:    tok.AccessToken,
-		refresh:   tok.RefreshToken,
-		expiresAt: expiresAt,
-	}); err != nil {
+	if err := m.saveFile(cfg, state); err != nil {
 		return err
 	}
 
-	m.installState(cfg, plaintextTokens{
-		access:    tok.AccessToken,
-		refresh:   tok.RefreshToken,
-		expiresAt: expiresAt,
-	})
+	m.installState(cfg, state)
 	return nil
 }
 
@@ -281,7 +337,7 @@ func (m *Manager) lookup(name string) *configState {
 	return m.configs[name]
 }
 
-// proactiveLoop refreshes a token shortly before it expires. Backs off on
+// proactiveLoop refreshes a token partway through its lifetime. Backs off on
 // transient failures; exits permanently on hard failures.
 func (m *Manager) proactiveLoop(ctx context.Context, st *configState) {
 	backoff := time.Second
@@ -290,10 +346,7 @@ func (m *Manager) proactiveLoop(ctx context.Context, st *configState) {
 		if p == nil {
 			return
 		}
-		wait := time.Until(p.expiresAt.Add(-proactiveWindow))
-		if wait < minProactiveSleep {
-			wait = minProactiveSleep
-		}
+		wait := proactiveWait(*p, time.Now())
 
 		select {
 		case <-ctx.Done():

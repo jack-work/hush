@@ -13,8 +13,12 @@ func commandScriptNames() []string {
 // shellCommand builds the process that runs a rendered command script.
 // The rendered text (which contains decrypted secrets) is passed as an
 // argument rather than written to disk. scriptName is unused on Unix.
-func shellCommand(rendered, scriptName string) *exec.Cmd {
-	return exec.Command("sh", "-c", rendered)
+//
+// argv0 and args land after the script text, so the script sees them as
+// $0, $1, $2 … and can use "$@" naturally.
+func shellCommand(rendered, scriptName, argv0 string, args []string) *exec.Cmd {
+	sh := append([]string{"-c", rendered, argv0}, args...)
+	return exec.Command("sh", sh...)
 }
 
 // defaultEditor is the fallback for `hush edit` when $EDITOR is unset.

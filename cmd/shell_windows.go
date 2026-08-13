@@ -19,7 +19,12 @@ func commandScriptNames() []string {
 // (which contains decrypted secrets) is passed as an argument, never
 // written to disk, matching the Unix sh -c posture. PowerShell handles a
 // multi-line -Command argument fine; cmd is best kept to single commands.
-func shellCommand(rendered, scriptName string) *exec.Cmd {
+//
+// Positional args ($0, $1 …) are only wired up for the POSIX .sh path,
+// where the semantics match Unix. PowerShell's -Command and cmd's /C have
+// no equivalent positional convention, so .ps1 and .cmd scripts continue
+// to read extra args through the {{.Args}} template accessor.
+func shellCommand(rendered, scriptName, argv0 string, args []string) *exec.Cmd {
 	switch filepath.Ext(scriptName) {
 	case ".ps1":
 		ps := "powershell.exe"
@@ -28,7 +33,8 @@ func shellCommand(rendered, scriptName string) *exec.Cmd {
 		}
 		return exec.Command(ps, "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", rendered)
 	case ".sh":
-		return exec.Command("sh", "-c", rendered)
+		sh := append([]string{"-c", rendered, argv0}, args...)
+		return exec.Command("sh", sh...)
 	default: // .cmd and anything else
 		return exec.Command("cmd.exe", "/C", rendered)
 	}

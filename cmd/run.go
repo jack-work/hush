@@ -85,7 +85,7 @@ func runCmd(cmd *cobra.Command, args []string) error {
 	}
 
 	// Execute via the platform shell for this script type.
-	sh := shellCommand(rendered.String(), scriptName)
+	sh := shellCommand(rendered.String(), scriptName, "hush-"+name, extra)
 	sh.Stdin = os.Stdin
 	sh.Stdout = os.Stdout
 	sh.Stderr = os.Stderr

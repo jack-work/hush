@@ -2,8 +2,6 @@ package cli
 
 import (
 	"fmt"
-	"os"
-	"path/filepath"
 
 	"github.com/spf13/cobra"
 )
@@ -19,52 +17,36 @@ var helpCmd = &cobra.Command{
 }
 
 func runHelp(cmd *cobra.Command, args []string) error {
-	fmt.Println(`hush — secret-injecting command runner
-
-Usage:
-  hush <command> [args...]    Run a hush command (decrypts secrets, templates, executes)
-  hush <builtin> [flags]      Run a built-in command
-
-Built-in commands:
-  init            Generate and encrypt an age identity
-  up [-d] [--ttl] Start the agent (foreground or daemon)
-  down            Stop the running agent
-  status          Show agent, identity, and command status
-  hush <name>     Bootstrap a new command with one secret
-  encrypt <name>  Encrypt plaintext values in a command's secrets.toml
-  encrypt-value   Encrypt a single string, print AGE-ENC[...] to stdout
-  decrypt-value   Decrypt a single AGE-ENC[...] string, print plaintext to stdout
-  lock            Encrypt all plaintext values across all commands
-  edit <name>     Decrypt secrets to $EDITOR, re-encrypt on save
-  oauth           Manage OAuth credentials refreshed by the agent
-  keyring         Manage the hush passphrase in the OS keyring
-  help            Show this help`)
+	// The built-in list is cobra's to render. Keeping a second copy here
+	// meant it drifted the moment a verb was renamed — it was still
+	// advertising `edit`, `lock`, `encrypt-value` and `decrypt-value`
+	// after all four had gone.
+	if err := cmd.Root().Help(); err != nil {
+		return err
+	}
 
 	commands := listCommands()
-	if len(commands) > 0 {
-		fmt.Printf("\nYour commands (%s):\n", cfg.CommandsDir)
-		for _, name := range commands {
-			cmdDir := filepath.Join(cfg.CommandsDir, name)
-			hasSecrets := false
-			if _, err := os.Stat(filepath.Join(cmdDir, "secrets.toml")); err == nil {
-				hasSecrets = true
-			}
-			hasCommand := false
-			if _, err := os.Stat(filepath.Join(cmdDir, "command.sh")); err == nil {
-				hasCommand = true
-			}
-			if hasCommand {
-				detail := ""
-				if hasSecrets {
-					detail = " (has secrets)"
-				}
-				fmt.Printf("  %-16s hush %s [args...]%s\n", name, name, detail)
-			} else if hasSecrets {
-				fmt.Printf("  %-16s config-only — secrets for library use\n", name)
-			}
+	shown := 0
+	for _, c := range commands {
+		if !c.runnable() {
+			continue // litter; `hush status` reports it, help does not advertise it
 		}
-	} else {
-		fmt.Println("\nNo commands yet. Run 'hush hush <name>' to create one.")
+		if shown == 0 {
+			fmt.Printf("\nYour commands (%s):\n", cfg.CommandsDir)
+		}
+		shown++
+		if !c.hasScript {
+			fmt.Printf("  %-16s config-only — secrets for library use\n", c.name)
+			continue
+		}
+		detail := ""
+		if c.hasSecrets {
+			detail = " (has secrets)"
+		}
+		fmt.Printf("  %-16s hush %s [args...]%s\n", c.name, c.name, detail)
+	}
+	if shown == 0 {
+		fmt.Println("\nNo commands yet. Run 'hush secret new <name>' to create one.")
 	}
 
 	return nil

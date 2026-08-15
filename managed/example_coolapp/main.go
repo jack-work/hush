@@ -69,7 +69,7 @@ func cmdSetup(h *managed.Hush) {
 
 	if h.Mode() == managed.ModeExternal {
 		fmt.Println("Using your existing hush installation — no setup needed.")
-		fmt.Println("Store secrets with: hush hush coolapp")
+		fmt.Println("Store secrets with: hush secret new coolapp")
 		return
 	}
 

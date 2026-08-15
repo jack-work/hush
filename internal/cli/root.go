@@ -14,9 +14,9 @@ var cfg *config.Config
 var rootCmd = &cobra.Command{
 	Use:   "hush [command] [args...]",
 	Short: "Secret-injecting command runner",
-	Long: `hush is a secret-injecting command runner. Built-in commands: init, up,
-encrypt-value. Any other argument is treated as a hush command name and
-looked up in ~/.config/hush/commands/.`,
+	Long: `hush is a secret-injecting command runner. Any argument that is not a
+built-in below is treated as a hush command name and looked up in
+~/.config/hush/commands/ — decrypted, templated, executed, forgotten.`,
 	SilenceUsage:  true,
 	SilenceErrors: true,
 	PersistentPreRunE: func(cmd *cobra.Command, args []string) error {

@@ -62,23 +62,17 @@ func runStatus(cmd *cobra.Command, args []string) error {
 	// Commands.
 	commands := listCommands()
 	fmt.Printf("\nCommands: %d\n", len(commands))
-	for _, name := range commands {
-		cmdDir := filepath.Join(cfg.CommandsDir, name)
-		hasSecrets := false
-		if _, err := os.Stat(filepath.Join(cmdDir, "secrets.toml")); err == nil {
-			hasSecrets = true
-		}
-		hasCommand := false
-		if _, err := os.Stat(filepath.Join(cmdDir, "command.sh")); err == nil {
-			hasCommand = true
-		}
-		detail := "no secrets"
-		if hasSecrets && hasCommand {
-			detail = "has secrets"
-		} else if hasSecrets && !hasCommand {
+	for _, c := range commands {
+		detail := "has secrets"
+		switch {
+		case !c.runnable():
+			detail = "empty — no script, no secrets"
+		case c.hasScript && !c.hasSecrets:
+			detail = "no secrets"
+		case c.hasSecrets && !c.hasScript:
 			detail = "config-only"
 		}
-		fmt.Printf("  %s (%s)\n", name, detail)
+		fmt.Printf("  %s (%s)\n", c.name, detail)
 	}
 
 	// Agent.
@@ -99,18 +93,47 @@ func runStatus(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-func listCommands() []string {
+// commandEntry is one directory under commands/, and what it actually
+// holds. A directory alone means nothing: `hush <name>` needs a script,
+// and a library consumer needs secrets.toml. A directory with neither is
+// leftover litter, and used to be counted and advertised as a command
+// that would then fail to run.
+type commandEntry struct {
+	name       string
+	hasScript  bool
+	hasSecrets bool
+}
+
+// runnable reports whether the entry is worth telling a user about.
+func (e commandEntry) runnable() bool { return e.hasScript || e.hasSecrets }
+
+func listCommands() []commandEntry {
 	entries, err := os.ReadDir(cfg.CommandsDir)
 	if err != nil {
 		return nil
 	}
-	var names []string
+	var out []commandEntry
 	for _, e := range entries {
-		if e.IsDir() {
-			names = append(names, e.Name())
+		if !e.IsDir() {
+			continue
 		}
+		dir := filepath.Join(cfg.CommandsDir, e.Name())
+		c := commandEntry{name: e.Name()}
+		// Ask the platform which script names count, rather than
+		// assuming command.sh — on Windows that is command.ps1 or
+		// command.cmd, and hard-coding .sh reported those as scriptless.
+		for _, n := range commandScriptNames() {
+			if _, err := os.Stat(filepath.Join(dir, n)); err == nil {
+				c.hasScript = true
+				break
+			}
+		}
+		if _, err := os.Stat(filepath.Join(dir, "secrets.toml")); err == nil {
+			c.hasSecrets = true
+		}
+		out = append(out, c)
 	}
-	return names
+	return out
 }
 
 // describeUnlock renders the active unlock method as a one-liner for

@@ -76,24 +76,24 @@ func runSeal(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("--key and --out apply to a single command; name one")
 	}
 
-	names := listCommands()
-	if len(names) == 0 {
+	commands := listCommands()
+	if len(commands) == 0 {
 		fmt.Fprintln(os.Stderr, "no commands found")
 		return nil
 	}
 
 	total := 0
-	for _, name := range names {
-		path := filepath.Join(cfg.CommandsDir, name, "secrets.toml")
-		if _, err := os.Stat(path); os.IsNotExist(err) {
+	for _, c := range commands {
+		if !c.hasSecrets {
 			continue
 		}
+		path := filepath.Join(cfg.CommandsDir, c.name, "secrets.toml")
 		n, err := sealFile(path, recipient, nil, "")
 		if err != nil {
-			return fmt.Errorf("%s: %w", name, err)
+			return fmt.Errorf("%s: %w", c.name, err)
 		}
 		if n > 0 {
-			fmt.Fprintf(os.Stderr, "  %s: sealed %d value(s)\n", name, n)
+			fmt.Fprintf(os.Stderr, "  %s: sealed %d value(s)\n", c.name, n)
 			total += n
 		}
 	}

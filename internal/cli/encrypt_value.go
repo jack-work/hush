@@ -13,11 +13,11 @@ import (
 )
 
 func init() {
-	rootCmd.AddCommand(encryptValueCmd)
+	secretCmd.AddCommand(encryptValueCmd)
 }
 
 var encryptValueCmd = &cobra.Command{
-	Use:   "encrypt-value <plaintext | ->",
+	Use:   "encrypt <plaintext | ->",
 	Short: "Encrypt a single value and print the AGE-ENC[...] string",
 	Long: `Encrypt a plaintext string using the public key from your hush identity.
 The result is an AGE-ENC[...] wrapped string suitable for secrets.toml.

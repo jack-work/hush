@@ -56,13 +56,14 @@ no guessing. no improvising.
 | `hush init` | generate your identity |
 | `hush up [-d] [--ttl 1h]` | start the agent |
 | `hush down` | zero the key, lights out |
-| `hush hush <name>` | set up a new secret command |
+| `hush secret new <name>` | set up a new secret command |
 | `hush <name> [args...]` | decrypt, template, execute, forget |
 | `hush keyring {set,get,clear}` | manage the OS-keyring entry for the unlock backend |
 | `hush oauth login <name>` | OAuth flow, register the result |
 | `hush oauth get <name>` | print the current access token |
 | `hush oauth refresh <name>` | force a refresh |
-| `hush encrypt-value <str>` | encrypt one value, print it |
+| `hush secret encrypt <str>` | encrypt one value, print it |
+| `hush secret seal [name]` | encrypt any plaintext left in secrets.toml (bare: everywhere) |
 | `hush status` | what's running, what's available |
 
 ## the rules I keep

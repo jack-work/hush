@@ -15,11 +15,11 @@ import (
 )
 
 func init() {
-	rootCmd.AddCommand(hushCmd)
+	secretCmd.AddCommand(hushCmd)
 }
 
 var hushCmd = &cobra.Command{
-	Use:   "hush <name>",
+	Use:   "new <name>",
 	Short: "Bootstrap a new command with a single secret",
 	Long: `Create a new command directory with a secrets.toml containing one encrypted
 secret and a stub command.sh that demonstrates the templating pattern.

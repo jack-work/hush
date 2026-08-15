@@ -14,11 +14,11 @@ import (
 )
 
 func init() {
-	rootCmd.AddCommand(decryptValueCmd)
+	secretCmd.AddCommand(decryptValueCmd)
 }
 
 var decryptValueCmd = &cobra.Command{
-	Use:   "decrypt-value <AGE-ENC[...] | ->",
+	Use:   "decrypt <AGE-ENC[...] | ->",
 	Short: "Decrypt a single AGE-ENC[...] value and print the plaintext",
 	Long: `Decrypt an AGE-ENC[...] wrapped string using the running hush agent.
 The result is printed to stdout.

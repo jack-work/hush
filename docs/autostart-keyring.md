@@ -81,7 +81,7 @@ agent up silently:
 
 ```powershell
 hush somecommand           # runs commands\somecommand\command.ps1 with secrets injected
-"AGE-ENC[...]" | hush decrypt-value -   # autostarts, decrypts, prints
+"AGE-ENC[...]" | hush secret decrypt -  # autostarts, decrypts, prints
 ```
 
 figaro (which embeds hush through the managed library) gets the same

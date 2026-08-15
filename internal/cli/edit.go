@@ -18,7 +18,7 @@ var editFile string
 
 func init() {
 	editCmd.Flags().StringVarP(&editFile, "file", "f", "", "path to secrets file (default: <commands-dir>/<name>/secrets.toml)")
-	rootCmd.AddCommand(editCmd)
+	secretCmd.AddCommand(editCmd)
 }
 
 var editCmd = &cobra.Command{

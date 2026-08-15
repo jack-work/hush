@@ -11,8 +11,8 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/jack-work/hush/internal/identity"
 	"github.com/jack-work/hush/internal/daemon"
+	"github.com/jack-work/hush/internal/identity"
 )
 
 // SpawnEnvVar is the environment variable set on re-exec'd child processes
@@ -69,13 +69,6 @@ func WaitForAgent(runtimeDir string, timeout time.Duration) error {
 		time.Sleep(50 * time.Millisecond)
 	}
 	return fmt.Errorf("timeout waiting for agent at %s", sockPath)
-}
-
-// IsAgentRunning checks whether an agent is responsive at the given
-// runtime directory's socket.
-func IsAgentRunning(runtimeDir string) bool {
-	sockPath := filepath.Join(runtimeDir, "agent.sock")
-	return ping(sockPath) == nil
 }
 
 func ping(sockPath string) error {

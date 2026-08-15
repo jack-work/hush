@@ -16,9 +16,9 @@ import (
 
 	"filippo.io/age"
 	"github.com/jack-work/hush/internal/identity"
-	"github.com/jack-work/hush/internal/singleton"
 	"github.com/jack-work/hush/internal/oauth"
 	"github.com/jack-work/hush/internal/secrets"
+	"github.com/jack-work/hush/internal/singleton"
 	"github.com/jack-work/hush/internal/version"
 )
 

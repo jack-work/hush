@@ -39,9 +39,3 @@ func shellCommand(rendered, scriptName, argv0 string, args []string) *exec.Cmd {
 		return exec.Command("cmd.exe", "/C", rendered)
 	}
 }
-
-// defaultEditor is the fallback for `hush edit` when $EDITOR is unset.
-// notepad is always present and needs no PATH setup, unlike vi.
-func defaultEditor() string {
-	return "notepad"
-}

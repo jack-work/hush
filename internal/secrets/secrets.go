@@ -10,7 +10,6 @@ import (
 	"encoding/base64"
 	"fmt"
 	"io"
-	"os"
 	"strings"
 
 	"filippo.io/age"
@@ -21,70 +20,6 @@ const (
 	EncPrefix = "AGE-ENC["
 	EncSuffix = "]"
 )
-
-// DecryptFile reads a TOML file from disk, decrypts any AGE-ENC[] wrapped
-// values using the provided identities, and passes through plaintext values
-// as-is. Returns a flat map of all key-value pairs fully decrypted.
-func DecryptFile(path string, identities []age.Identity) (map[string]string, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil, err
-	}
-
-	var raw map[string]string
-	if err := toml.Unmarshal(data, &raw); err != nil {
-		return nil, fmt.Errorf("parse toml: %w", err)
-	}
-
-	out := make(map[string]string, len(raw))
-	for k, v := range raw {
-		if IsEncrypted(v) {
-			dec, err := DecryptValue(v, identities)
-			if err != nil {
-				return nil, fmt.Errorf("decrypt key %q: %w", k, err)
-			}
-			out[k] = dec
-		} else {
-			out[k] = v
-		}
-	}
-	return out, nil
-}
-
-// EncryptFile takes a flat map of plaintext key-value pairs and a list of
-// which keys should be encrypted. For keys in keysToEncrypt, age-encrypt
-// the value to the recipient, base64 encode, wrap in AGE-ENC[...]. Leave
-// all other keys as plaintext. Marshal to TOML and return the bytes.
-// TODO: use a structured value in the map to indicate which should be encrypted
-// rather than string with adjacent list.
-func EncryptFile(values map[string]string, recipient age.Recipient, keysToEncrypt []string) ([]byte, error) {
-	encrypt := make(map[string]bool, len(keysToEncrypt))
-	for _, k := range keysToEncrypt {
-		if _, ok := values[k]; !ok {
-			return nil, fmt.Errorf("key %q listed in keysToEncrypt but not found in values", k)
-		}
-		encrypt[k] = true
-	}
-
-	out := make(map[string]string, len(values))
-	for k, v := range values {
-		if encrypt[k] {
-			enc, err := EncryptValue(v, recipient)
-			if err != nil {
-				return nil, fmt.Errorf("encrypt key %q: %w", k, err)
-			}
-			out[k] = enc
-		} else {
-			out[k] = v
-		}
-	}
-
-	var buf bytes.Buffer
-	if err := toml.NewEncoder(&buf).Encode(out); err != nil {
-		return nil, fmt.Errorf("encode toml: %w", err)
-	}
-	return buf.Bytes(), nil
-}
 
 // EncryptValue encrypts a single plaintext string and returns the AGE-ENC[...] wrapped string.
 func EncryptValue(plaintext string, recipient age.Recipient) (string, error) {

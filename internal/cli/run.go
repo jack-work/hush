@@ -14,8 +14,8 @@ import (
 	"golang.org/x/term"
 
 	"github.com/jack-work/hush/client"
-	"github.com/jack-work/hush/internal/identity"
 	"github.com/jack-work/hush/internal/daemon"
+	"github.com/jack-work/hush/internal/identity"
 	"github.com/jack-work/hush/internal/singleton"
 )
 

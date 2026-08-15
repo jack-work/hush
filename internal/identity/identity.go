@@ -118,18 +118,3 @@ func EncryptToFile(keyData []byte, outPath, passphrase string) error {
 	}
 	return aw.Close()
 }
-
-// UnlockPlaintext reads an unencrypted age identity file (for testing / convenience).
-func UnlockPlaintext(path string) (*DecryptedIdentity, error) {
-	raw, err := os.ReadFile(path)
-	if err != nil {
-		return nil, err
-	}
-
-	identities, err := age.ParseIdentities(bytes.NewReader(raw))
-	if err != nil {
-		return nil, fmt.Errorf("parse identities: %w", err)
-	}
-
-	return &DecryptedIdentity{raw: raw, Identities: identities}, nil
-}

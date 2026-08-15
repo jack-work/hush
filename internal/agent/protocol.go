@@ -19,12 +19,13 @@ type Request struct {
 
 // OAuthRequest carries the fields for any oauth_* op. Which subset is
 // required depends on Op:
-//   oauth_register:  Name, AuthorizeURL, TokenURL, RedirectURI, ClientID,
-//                    Scopes, AccessToken, RefreshToken, ExpiresIn
-//   oauth_get:       Name
-//   oauth_refresh:   Name
-//   oauth_delete:    Name
-//   oauth_list:      (none)
+//
+//	oauth_register:  Name, AuthorizeURL, TokenURL, RedirectURI, ClientID,
+//	                 Scopes, AccessToken, RefreshToken, ExpiresIn
+//	oauth_get:       Name
+//	oauth_refresh:   Name
+//	oauth_delete:    Name
+//	oauth_list:      (none)
 type OAuthRequest struct {
 	Name         string `json:"name,omitempty"`
 	AuthorizeURL string `json:"authorize_url,omitempty"`

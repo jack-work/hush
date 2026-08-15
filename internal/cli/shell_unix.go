@@ -20,8 +20,3 @@ func shellCommand(rendered, scriptName, argv0 string, args []string) *exec.Cmd {
 	sh := append([]string{"-c", rendered, argv0}, args...)
 	return exec.Command("sh", sh...)
 }
-
-// defaultEditor is the fallback for `hush edit` when $EDITOR is unset.
-func defaultEditor() string {
-	return "vi"
-}

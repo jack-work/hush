@@ -11,10 +11,10 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/jack-work/hush/internal/agent"
 	"github.com/jack-work/hush/client"
-	"github.com/jack-work/hush/internal/identity"
+	"github.com/jack-work/hush/internal/agent"
 	"github.com/jack-work/hush/internal/daemon"
+	"github.com/jack-work/hush/internal/identity"
 	"github.com/jack-work/hush/internal/singleton"
 	"github.com/jack-work/hush/internal/unlock"
 )

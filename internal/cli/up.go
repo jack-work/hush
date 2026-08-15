@@ -53,6 +53,22 @@ func runUp(cmd *cobra.Command, args []string) error {
 		return runChild(ttl)
 	}
 
+	// Nothing to start if the socket is already listening — and on a box
+	// with the socket unit installed it always is, whether or not an
+	// agent is behind it. Touching it is what starts one, so a ping is
+	// both the question and the answer. Checking here, before the
+	// unlock, means no passphrase prompt for an agent that already
+	// exists, and no spawned child that can only lose the race for the
+	// lock and die where nobody reads its stderr.
+	sockPath := filepath.Join(cfg.RuntimeDir, "agent.sock")
+	if agent.SocketIsListening(sockPath) {
+		if err := waitForAgent(cfg.RuntimeDir, 10*time.Second); err == nil {
+			pid, _ := singleton.Holder(filepath.Join(cfg.RuntimeDir, "agent.pid"))
+			fmt.Fprintf(os.Stderr, "agent already reachable at %s (pid %d) — nothing to start\n", sockPath, pid)
+			return nil
+		}
+	}
+
 	// Prompt for passphrase and decrypt identity.
 	id, err := promptAndUnlock(cfg.IdentityFile)
 	if err != nil {

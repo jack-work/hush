@@ -79,3 +79,12 @@ func ping(sockPath string) error {
 	defer conn.Close()
 	return nil
 }
+
+// SocketIsListening reports whether some process is listening on the
+// AF_UNIX path, answered passively (no connect). Callers that clean up
+// stale socket nodes need it: under socket activation the node belongs
+// to the service manager even when no agent is running, and dialing it
+// to find out would start the very agent they just stopped.
+//
+// Always false off Linux, where the question cannot be asked passively.
+func SocketIsListening(path string) bool { return socketIsListening(path) }

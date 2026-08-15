@@ -47,7 +47,40 @@ when you run `hush brave "query"`, I decrypt, template into your shell command, 
 | `hush secret seal [name]` | lock up plaintext you left lying about (bare: everywhere) |
 | `hush oauth login\|get\|refresh\|list\|delete <name>` | tokens I keep fresh |
 | `hush keyring set\|get\|clear` | the passphrase entry backing `method = "keyring"` |
+| `hush install-units` | let systemd start me on demand, so nobody has to |
 | `hush status` | what's running, what's available |
+
+## nobody has to start me
+
+on a systemd box, don't. install the units once:
+
+```
+hush install-units
+```
+
+that writes `hush-agent.socket` and `hush-agent.service` into your user
+units, reloads, and arms the socket. from then on the first client that
+touches `$XDG_RUNTIME_DIR/hush/agent.sock` makes systemd start me; I
+adopt the descriptor it already bound (`LISTEN_FDS`) instead of binding
+my own, so that client waits in the backlog for a heartbeat rather than
+getting the door slammed. I unlock by whatever `unlock.method` you named
+— on a desktop, the keyring that already opened at login. TTL expires, I
+exit, the socket re-arms. no login shell, no ritual, nothing in your
+profile.
+
+`hush up` and `hush up -d` still work exactly as before on boxes without
+the units. what I won't do is bind over a socket that's already
+listening: that node belongs to the socket unit, and unlinking it would
+leave systemd holding an inode nobody can reach — activation looking
+healthy and never firing again. so I refuse and tell you which door to
+use.
+
+on NixOS, the same two units come off the flake:
+
+```nix
+imports = [ hush.nixosModules.default ];
+services.hush-agent.enable = true;
+```
 
 ## what's on disk
 

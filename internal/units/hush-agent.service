@@ -1,0 +1,23 @@
+[Unit]
+Description=hush agent
+Documentation=https://github.com/jack-work/hush
+Requires=hush-agent.socket
+After=hush-agent.socket
+
+[Service]
+Type=exec
+ExecStart={{EXEC}} up
+
+# The agent's own TTL ends the process; the socket unit stays armed and
+# the next client starts a fresh one. Restarting on exit would defeat
+# the TTL, which exists so decrypted key material is not resident all
+# day.
+Restart=no
+
+# The unlock method may reach the OS keyring over the session bus. A
+# user manager started at boot (lingering) does not always have this
+# imported yet, and %t/bus is where the user dbus.socket puts it.
+Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=%t/bus
+
+[Install]
+# Nothing wants this: the socket unit starts it on demand.

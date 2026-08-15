@@ -36,6 +36,17 @@ type Agent struct {
 	// lock holds the single-instance lock for the agent's lifetime.
 	// Non-nil iff this process owns the runtime directory's files.
 	lock *singleton.Lock
+
+	// activated is true when the listener was inherited from a service
+	// manager rather than bound by us. The socket node then belongs to
+	// the manager: we neither create nor unlink it.
+	activated bool
+
+	// bound is true once this process has created the socket node
+	// itself. Only then is the node ours to remove on shutdown — a
+	// startup that refused to bind must leave someone else's node
+	// exactly where it found it.
+	bound bool
 }
 
 // New creates an agent from an already-decrypted identity. stateDir is used
@@ -70,9 +81,15 @@ func (a *Agent) Run() error {
 		return err
 	}
 
-	// We hold the lock, so no other agent is alive: any leftover socket
-	// is stale (e.g. a SIGKILL'd predecessor) and safe to replace.
-	os.Remove(a.sockPath())
+	// Socket activation: if a service manager already bound our socket
+	// and handed us the descriptor, adopt it. Clients that triggered the
+	// start are waiting in its backlog and see one connection, not a
+	// refusal followed by a retry.
+	ln, err := inheritedListener()
+	if err != nil {
+		return err
+	}
+	a.activated = ln != nil
 
 	if a.oauth != nil {
 		if err := a.oauth.Start(); err != nil {
@@ -80,16 +97,15 @@ func (a *Agent) Run() error {
 		}
 	}
 
-	sockPath := a.sockPath()
-	ln, err := net.Listen("unix", sockPath)
-	if err != nil {
-		return fmt.Errorf("listen: %w", err)
+	if a.activated {
+		a.log.Printf("adopted socket-activated listener at %s", a.sockPath())
+	} else {
+		ln, err = a.bindSocket()
+		if err != nil {
+			return err
+		}
 	}
 	a.listener = ln
-
-	if err := os.Chmod(sockPath, 0600); err != nil {
-		return fmt.Errorf("chmod socket: %w", err)
-	}
 
 	a.deadline = time.Now().Add(a.ttl)
 	a.log.Printf("agent started, pid=%d, ttl=%s, deadline=%s",
@@ -124,6 +140,41 @@ func (a *Agent) Run() error {
 		}
 		go a.handleConn(conn)
 	}
+}
+
+// bindSocket is the self-bind path: no service manager handed us a
+// listener, so we create the socket node ourselves. This is what
+// `hush up` and `hush up -d` have always done.
+func (a *Agent) bindSocket() (net.Listener, error) {
+	sockPath := a.sockPath()
+
+	// We hold the lock, so no other *agent* is alive. A node that is
+	// nonetheless listening therefore belongs to something else — in
+	// practice a systemd .socket unit holding it for activation.
+	// Unlinking it would leave that unit bound to an orphaned inode:
+	// activation would look healthy and never fire again. Refuse
+	// instead, and point at the door that does work.
+	if socketIsListening(sockPath) {
+		return nil, fmt.Errorf(
+			"%s is already listening but no agent holds the lock —\n"+
+				"a socket unit owns it. Start the agent through it instead:\n"+
+				"  systemctl --user start hush-agent.service", sockPath)
+	}
+
+	// Nothing is listening, so any leftover node is stale (e.g. a
+	// SIGKILL'd predecessor) and safe to replace.
+	os.Remove(sockPath)
+
+	ln, err := net.Listen("unix", sockPath)
+	if err != nil {
+		return nil, fmt.Errorf("listen: %w", err)
+	}
+	if err := os.Chmod(sockPath, 0600); err != nil {
+		ln.Close()
+		return nil, fmt.Errorf("chmod socket: %w", err)
+	}
+	a.bound = true
+	return ln, nil
 }
 
 func (a *Agent) handleConn(conn net.Conn) {
@@ -347,7 +398,13 @@ func (a *Agent) shutdown() {
 	// Only the lock holder owns the runtime files. A Run that failed to
 	// acquire the lock must not touch the live agent's socket.
 	if a.lock != nil {
-		os.Remove(a.sockPath())
+		// An inherited socket node is the service manager's, not ours:
+		// it re-arms on the same inode after we exit, so unlinking it
+		// would break every future activation. The same restraint
+		// applies to a startup that never got as far as binding.
+		if a.bound {
+			os.Remove(a.sockPath())
+		}
 		// Release the lock last; the PID file itself stays in place,
 		// it is the lock inode (see acquireLock).
 		a.lock.Release()

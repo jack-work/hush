@@ -9,6 +9,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/jack-work/hush/client"
+	"github.com/jack-work/hush/internal/agent"
 	"github.com/jack-work/hush/internal/singleton"
 )
 
@@ -36,7 +37,13 @@ func runDown(cmd *cobra.Command, args []string) error {
 	sockPath := filepath.Join(cfg.RuntimeDir, "agent.sock")
 
 	if free, _ := singleton.Free(pidPath); free {
-		os.Remove(sockPath) // stale leftover, e.g. a hard-killed agent
+		// No agent holds the lock. The socket node is either stale
+		// litter from a hard-killed predecessor — remove it — or a
+		// socket unit's, armed and waiting to activate the next agent,
+		// in which case removing it would break activation silently.
+		if !agent.SocketIsListening(sockPath) {
+			os.Remove(sockPath)
+		}
 		return fmt.Errorf("no agent running (lock at %s is free)", pidPath)
 	}
 

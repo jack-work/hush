@@ -1,0 +1,14 @@
+[Unit]
+Description=hush agent socket
+Documentation=https://github.com/jack-work/hush
+
+[Socket]
+# The agent adopts this descriptor (LISTEN_FDS) instead of binding its
+# own, so a client that connects here is queued in the backlog while the
+# agent unlocks — it sees one connection, never a refusal.
+ListenStream={{SOCKET}}
+SocketMode=0600
+DirectoryMode=0700
+
+[Install]
+WantedBy=sockets.target

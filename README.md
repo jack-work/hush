@@ -14,7 +14,7 @@ your `.env` file's loungin' around in plaintext. your shell history's runnin' it
 
 me? I hold secrets in memory, refresh the OAuth tokens that go stale, slip 'em where they gotta go, forget the rest. key's zeroed. socket's gone. I don't recall.
 
-**8 MB.** [age](https://age-encryption.org) encryption, a unix socket, a little keyvault gated by your passphrase. door locked. `0600`. quiet as a church.
+**9 MB.** [age](https://age-encryption.org) encryption, a unix socket, a little keyvault gated by your passphrase. door locked. `0600`. quiet as a church.
 
 ```
 go install github.com/jack-work/hush@latest && hush init
@@ -104,7 +104,7 @@ one of me at a time: exclusive `flock` on `agent.pid`, held for life, kernel let
 
 | | hush | sops |
 |---|---|---|
-| size | **8 MB** | 69 MB |
+| size | **9 MB** | 69 MB |
 | associates | age, toml | age, pgp, aws, gcp, azure, vault, grpc, ... |
 | refresh | yes | no |
 | disposition | quiet | loud |

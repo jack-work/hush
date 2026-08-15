@@ -1,13 +1,12 @@
 package config
 
 import (
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"time"
 
-	"github.com/spf13/viper"
+	"github.com/BurntSushi/toml"
 )
 
 type Config struct {
@@ -138,7 +137,7 @@ func LoadWithDirs(dirs Dirs) (*Config, error) {
 	return loadFromDirs(cfgDir, sDir, rDir)
 }
 
-// Load reads config with priority: flags (caller sets via viper) > env > file > defaults.
+// Load reads config with priority: env > file > defaults.
 func Load() (*Config, error) {
 	cfgDir, err := configDir()
 	if err != nil {
@@ -156,57 +155,84 @@ func Load() (*Config, error) {
 	return loadFromDirs(cfgDir, sDir, rDir)
 }
 
+// fileConfig is hush.toml on disk. Every field is optional; what is
+// absent keeps its default.
+type fileConfig struct {
+	TTL      string `toml:"ttl"`
+	Identity string `toml:"identity"`
+	Unlock   struct {
+		Method  string   `toml:"method"`
+		Exec    []string `toml:"exec"`
+		Keyring struct {
+			Service string `toml:"service"`
+			Account string `toml:"account"`
+		} `toml:"keyring"`
+	} `toml:"unlock"`
+}
+
+// loadFromDirs resolves configuration in one pass: defaults, overlaid by
+// <cfgDir>/hush.toml if it exists, overlaid by the environment.
+//
+// This used to be viper. Viper's cost was not its API — twelve calls —
+// but its company: a second TOML parser next to the one we already use,
+// a YAML parser in a program that has never seen YAML, a virtual
+// filesystem, a file watcher for a file we never watch. Half a megabyte
+// of linked symbols and nine modules to read five keys.
+//
+// It was also global state, which is a poor fit for a package whose
+// callers deliberately load several configurations in one process:
+// viper.AddConfigPath appends, so an embedded consumer resolving its own
+// dirs after hush's would search both and could read the wrong hush.toml,
+// and defaults set for the first load leaked into the second.
 func loadFromDirs(cfgDir, sDir, rDir string) (*Config, error) {
-	viper.SetDefault("ttl", "30m")
-	viper.SetDefault("identity", filepath.Join(cfgDir, "identity.age"))
-	viper.SetDefault("unlock.method", "auto")
-	viper.SetDefault("unlock.keyring.service", "hush")
-	viper.SetDefault("unlock.keyring.account", "default")
+	var f fileConfig
+	f.TTL = "30m"
+	f.Identity = filepath.Join(cfgDir, "identity.age")
+	f.Unlock.Method = "auto"
+	f.Unlock.Keyring.Service = "hush"
+	f.Unlock.Keyring.Account = "default"
 
-	viper.SetConfigName("hush")
-	viper.SetConfigType("toml")
-	viper.AddConfigPath(cfgDir)
-
-	viper.SetEnvPrefix("HUSH")
-	viper.AutomaticEnv()
-
-	if err := viper.ReadInConfig(); err != nil {
-		var notFound viper.ConfigFileNotFoundError
-		if !errors.As(err, &notFound) {
-			return nil, fmt.Errorf("read config: %w", err)
+	data, err := os.ReadFile(filepath.Join(cfgDir, "hush.toml"))
+	if err != nil && !os.IsNotExist(err) {
+		return nil, fmt.Errorf("read config: %w", err)
+	}
+	if err == nil {
+		if err := toml.Unmarshal(data, &f); err != nil {
+			return nil, fmt.Errorf("parse config: %w", err)
 		}
 	}
 
-	ttl, err := time.ParseDuration(viper.GetString("ttl"))
+	// Environment wins over the file. Only these three are honoured, which
+	// is what viper's AutomaticEnv actually managed: dotted keys never
+	// bound without a key replacer, so HUSH_UNLOCK_METHOD never worked.
+	overrideFromEnv("HUSH_TTL", &f.TTL)
+	overrideFromEnv("HUSH_IDENTITY", &f.Identity)
+	overrideFromEnv("HUSH_KEYRING_SERVICE", &f.Unlock.Keyring.Service)
+
+	ttl, err := time.ParseDuration(f.TTL)
 	if err != nil {
 		return nil, fmt.Errorf("parse ttl: %w", err)
 	}
 
-	// HUSH_KEYRING_SERVICE overrides unlock.keyring.service so dev
-	// shells can namespace keyring entries the same way they scope
-	// HUSH_CONFIG_DIR. Done explicitly because viper's env binding
-	// for dotted keys is finicky.
-	keyringService := viper.GetString("unlock.keyring.service")
-	if v := os.Getenv("HUSH_KEYRING_SERVICE"); v != "" {
-		keyringService = v
-	}
-
 	return &Config{
 		TTL:          ttl,
-		IdentityFile: viper.GetString("identity"),
+		IdentityFile: f.Identity,
 		ConfigDir:    cfgDir,
 		CommandsDir:  filepath.Join(cfgDir, "commands"),
 		StateDir:     sDir,
 		RuntimeDir:   rDir,
 		Unlock: UnlockConfig{
-			Method: viper.GetString("unlock.method"),
-			Keyring: KeyringConfig{
-				Service: keyringService,
-				Account: viper.GetString("unlock.keyring.account"),
-			},
-			Exec: viper.GetStringSlice("unlock.exec"),
+			Method:  f.Unlock.Method,
+			Keyring: KeyringConfig(f.Unlock.Keyring),
+			Exec:    f.Unlock.Exec,
 		},
 	}, nil
+}
+
+func overrideFromEnv(key string, dst *string) {
+	if v := os.Getenv(key); v != "" {
+		*dst = v
+	}
 }
 
 // AppDirs returns platform-correct config and state directories for a

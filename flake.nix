@@ -21,7 +21,7 @@
       overlays.default = final: prev: {
         hush = final.buildGoModule rec {
           pname = "hush";
-          version = "0.9.0";
+          version = "0.10.0";
           src = self;
           vendorHash = "sha256-wp2UVhQupPdJb1WDHxdmPtZF544ONlT5I4uqN9ml6kc=";
           subPackages = [ "." ];
@@ -35,7 +35,7 @@
             else "unknown";
           ldflags = [
             "-s" "-w"
-            "-X github.com/jack-work/hush/version.Version=${version}-${rev}"
+            "-X github.com/jack-work/hush/internal/version.Version=${version}-${rev}"
           ];
 
           meta.mainProgram = "hush";
@@ -49,6 +49,66 @@
         }).hush;
         default = hush;
       });
+
+      # The agent as a socket-activated per-user service, for NixOS
+      # nodes. The Arch/other-distro equivalent of this module is
+      # `hush install-units`, which writes the same two units from
+      # internal/units — keep them in step.
+      #
+      #   imports = [ hush.nixosModules.default ];
+      #   services.hush-agent.enable = true;
+      #
+      # There is nothing to start at boot and nothing to log into: the
+      # first client to touch the socket starts the agent, which unlocks
+      # by whatever unlock.method the user's hush.toml names (on a
+      # desktop node, the OS keyring; on a headless one, `exec`).
+      nixosModules.default = { config, lib, pkgs, ... }:
+        let cfg = config.services.hush-agent;
+        in {
+          options.services.hush-agent = {
+            enable = lib.mkEnableOption
+              "the socket-activated hush agent (a per-user service)";
+
+            package = lib.mkOption {
+              type = lib.types.package;
+              default = self.packages.${pkgs.stdenv.hostPlatform.system}.hush;
+              defaultText = lib.literalExpression "hush.packages.\${system}.hush";
+              description = "The hush package whose agent is started.";
+            };
+          };
+
+          config = lib.mkIf cfg.enable {
+            systemd.user.sockets.hush-agent = {
+              description = "hush agent socket";
+              wantedBy = [ "sockets.target" ];
+              socketConfig = {
+                # The agent adopts this descriptor rather than binding
+                # its own, so a client that arrives first waits in the
+                # backlog instead of being refused.
+                ListenStream = "%t/hush/agent.sock";
+                SocketMode = "0600";
+                DirectoryMode = "0700";
+              };
+            };
+
+            systemd.user.services.hush-agent = {
+              description = "hush agent";
+              requires = [ "hush-agent.socket" ];
+              after = [ "hush-agent.socket" ];
+              serviceConfig = {
+                Type = "exec";
+                ExecStart = "${lib.getExe cfg.package} up";
+                # The agent's TTL ends the process and the socket unit
+                # re-arms; restarting would defeat the TTL, which exists
+                # so decrypted key material is not resident all day.
+                Restart = "no";
+                Environment = [ "DBUS_SESSION_BUS_ADDRESS=unix:path=%t/bus" ];
+              };
+            };
+          };
+        };
+
+      nixosModules.hush-agent = self.nixosModules.default;
 
       devShells = forAllSystems ({ pkgs }: let
         hushPkg = self.packages.${pkgs.system}.default;

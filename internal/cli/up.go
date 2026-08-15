@@ -60,8 +60,15 @@ func runUp(cmd *cobra.Command, args []string) error {
 	// unlock, means no passphrase prompt for an agent that already
 	// exists, and no spawned child that can only lose the race for the
 	// lock and die where nobody reads its stderr.
+	//
+	// Except when we are the activated agent. Then the socket is
+	// listening because systemd is holding it for *us*, the ping would
+	// be answered by nobody but ourselves, and asking would deadlock
+	// until the client's deadline. Whoever was waiting in the backlog
+	// gets a timeout and the familiar "agent is not running" — the exact
+	// failure this release exists to end.
 	sockPath := filepath.Join(cfg.RuntimeDir, "agent.sock")
-	if agent.SocketIsListening(sockPath) {
+	if !agent.SocketActivated() && agent.SocketIsListening(sockPath) {
 		if err := waitForAgent(cfg.RuntimeDir, 10*time.Second); err == nil {
 			pid, _ := singleton.Holder(filepath.Join(cfg.RuntimeDir, "agent.pid"))
 			fmt.Fprintf(os.Stderr, "agent already reachable at %s (pid %d) — nothing to start\n", sockPath, pid)

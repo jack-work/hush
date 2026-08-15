@@ -93,3 +93,20 @@ func clearActivationEnv() {
 		os.Unsetenv(k)
 	}
 }
+
+// SocketActivated reports whether a service manager has handed this
+// process a listening socket — that is, whether LISTEN_PID names us. It
+// only reads the environment; the claim is consumed later, by the agent
+// itself.
+//
+// The CLI has to know this before it does anything clever with the
+// socket. An activated `hush up` must not, for one, probe the socket to
+// see whether an agent is already answering: it *is* the process that
+// would answer, and the probe would wait for a reply it is holding.
+func SocketActivated() bool {
+	pid, err := strconv.Atoi(os.Getenv("LISTEN_PID"))
+	if err != nil {
+		return false
+	}
+	return pid == os.Getpid() && os.Getenv("LISTEN_FDS") != ""
+}

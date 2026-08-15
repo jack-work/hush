@@ -1,4 +1,4 @@
-package cmd
+package cli
 
 import (
 	"bufio"
@@ -16,7 +16,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/jack-work/hush/client"
-	"github.com/jack-work/hush/oauth"
+	"github.com/jack-work/hush/internal/oauth"
 )
 
 func init() {

@@ -19,7 +19,6 @@ import (
 	"golang.org/x/term"
 
 	"github.com/jack-work/hush/managed"
-	"github.com/jack-work/hush/secrets"
 )
 
 func main() {
@@ -147,5 +146,6 @@ func cmdStatus(h *managed.Hush) {
 		fmt.Println("Agent: not running")
 	}
 
-	_ = secrets.IsEncrypted // just to show the import works
+	// Embedders that need to encrypt without a running agent do it through
+	// h.Encrypt (which proxies to the agent); hush.secrets is internal.
 }

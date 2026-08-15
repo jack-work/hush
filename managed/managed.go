@@ -45,11 +45,11 @@ import (
 
 	"github.com/zalando/go-keyring"
 
-	"github.com/jack-work/hush/agent"
+	"github.com/jack-work/hush/internal/agent"
 	"github.com/jack-work/hush/client"
 	"github.com/jack-work/hush/config"
-	"github.com/jack-work/hush/identity"
-	"github.com/jack-work/hush/unlock"
+	"github.com/jack-work/hush/internal/identity"
+	"github.com/jack-work/hush/internal/unlock"
 )
 
 // Options configures a managed hush instance.

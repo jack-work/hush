@@ -8,7 +8,7 @@ import (
 	"filippo.io/age"
 	"github.com/zalando/go-keyring"
 
-	"github.com/jack-work/hush/identity"
+	"github.com/jack-work/hush/internal/identity"
 )
 
 // The Verify hook every real consumer wires (managed.verifyPassphrase,

@@ -7,7 +7,7 @@ import (
 
 	"filippo.io/age"
 
-	"github.com/jack-work/hush/identity"
+	"github.com/jack-work/hush/internal/identity"
 	"github.com/jack-work/hush/config"
 )
 

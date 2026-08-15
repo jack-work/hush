@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"github.com/BurntSushi/toml"
-	"github.com/jack-work/hush/secrets"
+	"github.com/jack-work/hush/internal/secrets"
 )
 
 // tomlForm is the on-disk shape. Metadata fields are plaintext; tokens are

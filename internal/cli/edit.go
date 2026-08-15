@@ -1,4 +1,4 @@
-package cmd
+package cli
 
 import (
 	"fmt"
@@ -11,7 +11,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/jack-work/hush/client"
-	"github.com/jack-work/hush/secrets"
+	"github.com/jack-work/hush/internal/secrets"
 )
 
 var editFile string

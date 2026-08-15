@@ -1,4 +1,4 @@
-package cmd
+package cli
 
 import (
 	"fmt"
@@ -10,7 +10,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/jack-work/hush/identity"
+	"github.com/jack-work/hush/internal/identity"
 )
 
 func init() {

@@ -11,7 +11,7 @@ import (
 
 	"filippo.io/age"
 
-	"github.com/jack-work/hush/identity"
+	"github.com/jack-work/hush/internal/identity"
 )
 
 func newTestAgent(t *testing.T, runtimeDir, stateDir string) *Agent {

@@ -1,7 +1,7 @@
 package main
 
-import "github.com/jack-work/hush/cmd"
+import "github.com/jack-work/hush/internal/cli"
 
 func main() {
-	cmd.Execute()
+	cli.Execute()
 }

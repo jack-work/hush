@@ -1,4 +1,4 @@
-package cmd
+package cli
 
 import (
 	"fmt"
@@ -10,7 +10,7 @@ import (
 
 	"github.com/jack-work/hush/client"
 	"github.com/jack-work/hush/config"
-	"github.com/jack-work/hush/version"
+	"github.com/jack-work/hush/internal/version"
 )
 
 var flagCheck bool

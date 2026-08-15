@@ -15,11 +15,11 @@ import (
 	"time"
 
 	"filippo.io/age"
-	"github.com/jack-work/hush/identity"
+	"github.com/jack-work/hush/internal/identity"
 	"github.com/jack-work/hush/internal/singleton"
-	"github.com/jack-work/hush/oauth"
-	"github.com/jack-work/hush/secrets"
-	"github.com/jack-work/hush/version"
+	"github.com/jack-work/hush/internal/oauth"
+	"github.com/jack-work/hush/internal/secrets"
+	"github.com/jack-work/hush/internal/version"
 )
 
 // Agent holds the decrypted identity and manages the unix socket listener.

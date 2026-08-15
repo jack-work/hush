@@ -23,7 +23,7 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/jack-work/hush/agent"
+	"github.com/jack-work/hush/internal/agent"
 )
 
 // Client talks to a running hush agent over a unix socket.

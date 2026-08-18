@@ -8,11 +8,14 @@ package e2e
 import (
 	"bytes"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -273,4 +276,90 @@ func TestDownWithoutAgent(t *testing.T) {
 	if !strings.Contains(string(out), "no agent running") {
 		t.Fatalf("down output %q, want 'no agent running'", out)
 	}
+}
+
+// TestCopilotExchangeLifecycle drives the exchange grant through a REAL
+// agent over a real socket: registration mints the first session, the
+// session and its routing metadata survive a restart, and a forced refresh
+// mints again from the durable secret.
+//
+// The exchange endpoint is a local stub. What is real is everything hush
+// owns: the socket protocol, age encryption, the on-disk form, the reload
+// path, and the single manager every client shares.
+func TestCopilotExchangeLifecycle(t *testing.T) {
+	var hits int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n := atomic.AddInt32(&hits, 1)
+		if got := r.Header.Get("Authorization"); got != "Bearer gho_durable" {
+			t.Errorf("exchange saw Authorization %q", got)
+		}
+		fmt.Fprintf(w, `{"token":"sess-%d","expires_at":%d,"endpoints":{"api":"https://api.example.com"}}`,
+			n, time.Now().Add(28*time.Minute).Unix())
+	}))
+	defer srv.Close()
+
+	w := newWorld(t)
+	agent := w.startAgent(t)
+	c := w.client()
+
+	if err := c.OAuthRegister(client.OAuthRegisterRequest{
+		Name:         "copilot",
+		TokenURL:     srv.URL,
+		Grant:        "copilot",
+		RefreshToken: "gho_durable",
+	}); err != nil {
+		t.Fatalf("register copilot credential: %v", err)
+	}
+
+	tok, meta, err := c.OAuthGetFull("copilot")
+	if err != nil {
+		t.Fatalf("oauth get: %v", err)
+	}
+	if tok != "sess-1" {
+		t.Fatalf("token = %q, want the session minted at registration", tok)
+	}
+	if meta["api_base"] != "https://api.example.com" {
+		t.Fatalf("metadata = %v, want the API host the exchange named", meta)
+	}
+
+	// Many readers, one session: this is the whole point of the move.
+	for i := 0; i < 5; i++ {
+		if got, _, err := c.OAuthGetFull("copilot"); err != nil || got != "sess-1" {
+			t.Fatalf("reader %d: %q, %v", i, got, err)
+		}
+	}
+	if n := atomic.LoadInt32(&hits); n != 1 {
+		t.Fatalf("exchanges = %d, want 1: reading minted new sessions", n)
+	}
+
+	if out, err := w.command("down").CombinedOutput(); err != nil {
+		t.Fatalf("hush down: %v\n%s", err, out)
+	}
+	agent.Wait()
+
+	agent2 := w.startAgent(t)
+	tok, meta, err = w.client().OAuthGetFull("copilot")
+	if err != nil {
+		t.Fatalf("oauth get after restart: %v", err)
+	}
+	if tok != "sess-1" || meta["api_base"] != "https://api.example.com" {
+		t.Fatalf("after restart: %q / %v — session or routing lost", tok, meta)
+	}
+	if n := atomic.LoadInt32(&hits); n != 1 {
+		t.Fatalf("exchanges = %d after restart, want 1: the reload re-minted", n)
+	}
+
+	// A forced refresh mints from the durable secret, which never rotated.
+	fresh, meta, err := w.client().OAuthRefreshFull("copilot")
+	if err != nil {
+		t.Fatalf("oauth refresh: %v", err)
+	}
+	if fresh != "sess-2" || meta["api_base"] == "" {
+		t.Fatalf("refresh produced %q / %v", fresh, meta)
+	}
+
+	if out, err := w.command("down").CombinedOutput(); err != nil {
+		t.Fatalf("final down: %v\n%s", err, out)
+	}
+	agent2.Wait()
 }

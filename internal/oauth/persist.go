@@ -21,6 +21,9 @@ type tomlForm struct {
 	RedirectURI  string `toml:"redirect_uri"`
 	ClientID     string `toml:"client_id"`
 	Scopes       string `toml:"scopes"`
+	// Grant is the minting strategy. Absent means refresh_token: files
+	// written by an older hush load unchanged and keep their behaviour.
+	Grant        string `toml:"grant,omitempty"`
 	AccessToken  string `toml:"access_token"`
 	RefreshToken string `toml:"refresh_token"`
 	// RefreshTokenPrev is the predecessor of RefreshToken, kept so a
@@ -29,6 +32,10 @@ type tomlForm struct {
 	RefreshTokenPrev string `toml:"refresh_token_prev,omitempty"`
 	IssuedAt         int64  `toml:"issued_at,omitempty"`
 	ExpiresAt        int64  `toml:"expires_at"`
+	// Metadata is minted with the access token and is NOT secret (an API
+	// host, say). Plaintext so it can be read without unlocking, and
+	// rewritten on every mint so it can never outlive its token.
+	Metadata map[string]string `toml:"metadata,omitempty"`
 }
 
 func (m *Manager) oauthDir() string {
@@ -81,10 +88,12 @@ func (m *Manager) loadFile(path string) (Config, plaintextTokens, error) {
 		RedirectURI:  raw.RedirectURI,
 		ClientID:     raw.ClientID,
 		Scopes:       raw.Scopes,
+		Grant:        raw.Grant,
 	}
 	tok := plaintextTokens{
 		access:      access,
 		refresh:     refresh,
+		metadata:    raw.Metadata,
 		prevRefresh: prevRefresh,
 		expiresAt:   time.UnixMilli(raw.ExpiresAt),
 	}
@@ -119,6 +128,8 @@ func (m *Manager) saveFile(cfg Config, tok plaintextTokens) error {
 		RedirectURI:      cfg.RedirectURI,
 		ClientID:         cfg.ClientID,
 		Scopes:           cfg.Scopes,
+		Grant:            cfg.Grant,
+		Metadata:         tok.metadata,
 		AccessToken:      encAccess,
 		RefreshToken:     encRefresh,
 		RefreshTokenPrev: encPrevRefresh,

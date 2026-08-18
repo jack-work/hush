@@ -20,8 +20,10 @@ type Request struct {
 // OAuthRequest carries the fields for any oauth_* op. Which subset is
 // required depends on Op:
 //
-//	oauth_register:  Name, AuthorizeURL, TokenURL, RedirectURI, ClientID,
-//	                 Scopes, AccessToken, RefreshToken, ExpiresIn
+//	oauth_register:  Name, TokenURL, RefreshToken (the durable secret),
+//	                 Grant, and — for grants that do not mint on register —
+//	                 AccessToken, ExpiresIn, plus AuthorizeURL, RedirectURI,
+//	                 ClientID, Scopes
 //	oauth_get:       Name
 //	oauth_refresh:   Name
 //	oauth_delete:    Name
@@ -36,6 +38,8 @@ type OAuthRequest struct {
 	AccessToken  string `json:"access_token,omitempty"`
 	RefreshToken string `json:"refresh_token,omitempty"`
 	ExpiresIn    int    `json:"expires_in,omitempty"`
+	// Grant selects the minting strategy; empty means refresh_token.
+	Grant string `json:"grant,omitempty"`
 }
 
 // Response is the JSON envelope returned by the agent.
@@ -50,6 +54,9 @@ type Response struct {
 
 	Token string   `json:"token,omitempty"` // oauth_get, oauth_refresh
 	Names []string `json:"names,omitempty"` // oauth_list
+	// Metadata was minted WITH Token and is not secret: Copilot's exchange
+	// answers with the API host its session token must be spent at.
+	Metadata map[string]string `json:"metadata,omitempty"` // oauth_get, oauth_refresh
 }
 
 // Structured error codes returned in Response.ErrorCode.

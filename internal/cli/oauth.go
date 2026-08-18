@@ -40,6 +40,7 @@ var (
 	oauthRegFlagClientID     string
 	oauthRegFlagScopes       string
 	oauthRegFlagExpiresIn    int
+	oauthRegFlagGrant        string
 )
 
 func init() {
@@ -50,6 +51,7 @@ func init() {
 	f.StringVar(&oauthRegFlagClientID, "client-id", "", "OAuth client ID (required)")
 	f.StringVar(&oauthRegFlagScopes, "scopes", "", "OAuth scopes (space-separated)")
 	f.IntVar(&oauthRegFlagExpiresIn, "expires-in", 0, "seconds until access token expires")
+	f.StringVar(&oauthRegFlagGrant, "grant", "", "minting strategy: refresh_token (default) or copilot")
 }
 
 var oauthRegisterCmd = &cobra.Command{
@@ -69,6 +71,16 @@ func runOAuthRegister(cmd *cobra.Command, args []string) error {
 	c, err := connectAgent()
 	if err != nil {
 		return err
+	}
+
+	grant := oauthRegFlagGrant
+
+	// An EXCHANGE grant derives its access token from a durable secret, so
+	// registration needs only that secret and the endpoint: no client id,
+	// no access token, no expiry. The agent mints the first session itself,
+	// which also proves the credential works while someone is watching.
+	if grant == "copilot" {
+		return registerExchange(c, name, grant)
 	}
 
 	authURL := oauthRegFlagAuthorizeURL
@@ -127,6 +139,30 @@ func runOAuthRegister(cmd *cobra.Command, args []string) error {
 		return err
 	}
 	fmt.Fprintf(os.Stderr, "registered oauth credential %q\n", name)
+	return nil
+}
+
+// registerExchange handles the grants whose durable secret is the whole
+// registration.
+func registerExchange(c *client.Client, name, grant string) error {
+	reader := bufio.NewReader(os.Stdin)
+	tokURL := oauthRegFlagTokenURL
+	if tokURL == "" {
+		tokURL = promptLine(reader, "token_url (the exchange endpoint): ")
+	}
+	secret, err := promptSecret("durable secret (e.g. GitHub access token): ")
+	if err != nil {
+		return err
+	}
+	if err := c.OAuthRegister(client.OAuthRegisterRequest{
+		Name:         name,
+		TokenURL:     tokURL,
+		Grant:        grant,
+		RefreshToken: secret,
+	}); err != nil {
+		return err
+	}
+	fmt.Fprintf(os.Stderr, "registered %s credential %q (first session minted)\n", grant, name)
 	return nil
 }
 

@@ -13,6 +13,7 @@ package oauth
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log"
 	"os"
 	"path/filepath"
@@ -23,7 +24,8 @@ import (
 	"filippo.io/age"
 )
 
-// Config describes one OAuth provider's refresh endpoint.
+// Config describes one credential: where to mint an access token, and by
+// which grant.
 type Config struct {
 	Name         string
 	AuthorizeURL string
@@ -31,13 +33,26 @@ type Config struct {
 	RedirectURI  string
 	ClientID     string
 	Scopes       string
+
+	// Grant selects the minting strategy (see grant.go). Empty means
+	// refresh_token, so every file written by an older hush loads and
+	// behaves exactly as it did.
+	Grant string
 }
 
-// Tokens are the credential values returned by an OAuth token endpoint.
+// Tokens are the credential values a grant returns.
 type Tokens struct {
-	AccessToken  string
+	AccessToken string
+	// RefreshToken is the DURABLE secret: a rotating refresh token under
+	// the refresh_token grant, a stable one (a GitHub access token) under
+	// an exchange. Either way it is what the next mint is made from.
 	RefreshToken string
 	ExpiresIn    int // seconds; absolute expiry computed at write time
+
+	// Metadata carries non-secret facts that arrived WITH the token and
+	// are useless without it: Copilot's exchange answers with the API host
+	// to spend the session token at. Readers get it from Get.
+	Metadata map[string]string
 }
 
 // Errors surfaced to clients. The agent maps these to Response.ErrorCode so
@@ -79,6 +94,10 @@ type plaintextTokens struct {
 	access  string
 	refresh string
 
+	// metadata is non-secret and travels with the access token: it is
+	// re-minted with it, so it can never describe a token that is gone.
+	metadata map[string]string
+
 	// prevRefresh is the refresh token this one replaced. Providers that
 	// rotate on every refresh (Authelia) leave no way to recover if the new
 	// token is lost between the HTTP response and the disk write, so we keep
@@ -99,6 +118,7 @@ func newTokenState(tok Tokens, prevRefresh string, now time.Time) plaintextToken
 	return plaintextTokens{
 		access:      tok.AccessToken,
 		refresh:     tok.RefreshToken,
+		metadata:    tok.Metadata,
 		prevRefresh: prevRefresh,
 		issuedAt:    now,
 		expiresAt:   now.Add(lifetime),
@@ -237,14 +257,23 @@ func (m *Manager) Register(cfg Config, tok Tokens) error {
 	if cfg.Name == "" {
 		return errors.New("oauth: config name is required")
 	}
-	if cfg.TokenURL == "" {
-		return errors.New("oauth: token_url is required")
+	g, err := grantFor(cfg)
+	if err != nil {
+		return err
 	}
-	if cfg.ClientID == "" {
-		return errors.New("oauth: client_id is required")
+	if err := g.Validate(cfg, tok); err != nil {
+		return err
 	}
-	if tok.AccessToken == "" || tok.RefreshToken == "" {
-		return errors.New("oauth: access and refresh tokens are both required")
+
+	// An exchange registers with only the durable secret. Mint the first
+	// access token here rather than leaving readers to discover on their
+	// first call whether the credential was ever any good.
+	if tok.AccessToken == "" && g.MintsOnRegister() {
+		minted, err := g.Mint(m.ctx, m.httpClient, cfg, tok.RefreshToken)
+		if err != nil {
+			return fmt.Errorf("oauth: %s: first mint failed: %w", cfg.Name, err)
+		}
+		tok = minted
 	}
 
 	state := newTokenState(tok, "", time.Now())
@@ -261,15 +290,50 @@ func (m *Manager) Register(cfg Config, tok Tokens) error {
 // returns whatever is currently in the cache (which may be clock-expired —
 // callers detect that via 401 from the provider and call Refresh).
 func (m *Manager) Get(name string) (string, error) {
+	tok, _, err := m.GetFull(name)
+	return tok, err
+}
+
+// GetFull returns the cached access token and the metadata minted with it.
+// Same non-blocking contract as Get.
+func (m *Manager) GetFull(name string) (string, map[string]string, error) {
 	st := m.lookup(name)
 	if st == nil {
-		return "", ErrNotFound
+		return "", nil, ErrNotFound
 	}
 	p := st.tokens.Load()
 	if p == nil {
-		return "", ErrNotFound
+		return "", nil, ErrNotFound
 	}
-	return p.access, nil
+	return p.access, cloneMeta(p.metadata), nil
+}
+
+// RefreshFull forces a mint and returns the new token with its metadata.
+func (m *Manager) RefreshFull(name string) (string, map[string]string, error) {
+	tok, err := m.Refresh(name)
+	if err != nil {
+		return "", nil, err
+	}
+	st := m.lookup(name)
+	if st == nil {
+		return tok, nil, nil
+	}
+	p := st.tokens.Load()
+	if p == nil {
+		return tok, nil, nil
+	}
+	return tok, cloneMeta(p.metadata), nil
+}
+
+func cloneMeta(m map[string]string) map[string]string {
+	if len(m) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(m))
+	for k, v := range m {
+		out[k] = v
+	}
+	return out
 }
 
 // Refresh forces a refresh for name, coalescing with any in-flight refresh

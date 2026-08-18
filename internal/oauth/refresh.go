@@ -1,13 +1,9 @@
 package oauth
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
-	"net/url"
-	"strings"
 	"time"
 )
 
@@ -36,7 +32,7 @@ func (m *Manager) doRefresh(st *configState) (string, error) {
 	st.mu.Unlock()
 
 	cur := st.tokens.Load()
-	tok, err := m.refreshHTTP(st, currentRefresh(cur))
+	tok, err := m.mint(st, currentRefresh(cur))
 	if errors.Is(err, ErrRefreshPermanent) {
 		// A permanent rejection usually means our refresh token was
 		// rotated away by another process whose success is already on
@@ -52,7 +48,7 @@ func (m *Manager) doRefresh(st *configState) (string, error) {
 		// The predecessor is the only other candidate — try it once.
 		if prev := previousRefresh(cur); prev != "" {
 			m.logger.Printf("oauth: %s refresh rejected; retrying with the previous refresh token", st.cfg.Name)
-			if prevTok, prevErr := m.refreshHTTP(st, prev); prevErr == nil {
+			if prevTok, prevErr := m.mint(st, prev); prevErr == nil {
 				tok, err = prevTok, nil
 			}
 		}
@@ -88,6 +84,16 @@ func (m *Manager) finish(op *refreshOp, st *configState, result string, err erro
 	st.mu.Unlock()
 }
 
+// mint asks the config's grant for a fresh access token. The manager knows
+// nothing about wire formats; this is the only door to one.
+func (m *Manager) mint(st *configState, durable string) (Tokens, error) {
+	g, err := grantFor(st.cfg)
+	if err != nil {
+		return Tokens{}, err
+	}
+	return g.Mint(m.ctx, m.httpClient, st.cfg, durable)
+}
+
 // currentRefresh and previousRefresh read a possibly-nil cached state.
 func currentRefresh(p *plaintextTokens) string {
 	if p == nil {
@@ -101,66 +107,6 @@ func previousRefresh(p *plaintextTokens) string {
 		return ""
 	}
 	return p.prevRefresh
-}
-
-// refreshHTTP makes the token-endpoint POST. RFC 6749 §4.5 mandates
-// application/x-www-form-urlencoded; some providers (Anthropic) happen
-// to accept JSON too, but the canonical spec-compliant form works for
-// everyone including strict implementations like Authelia's OIDC.
-func (m *Manager) refreshHTTP(st *configState, refreshToken string) (Tokens, error) {
-	if refreshToken == "" {
-		return Tokens{}, ErrNotFound
-	}
-
-	form := url.Values{
-		"grant_type":    {"refresh_token"},
-		"client_id":     {st.cfg.ClientID},
-		"refresh_token": {refreshToken},
-	}
-
-	req, err := http.NewRequestWithContext(m.ctx, "POST", st.cfg.TokenURL, strings.NewReader(form.Encode()))
-	if err != nil {
-		return Tokens{}, fmt.Errorf("%w: build request: %v", ErrRefreshTransient, err)
-	}
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	req.Header.Set("Accept", "application/json")
-
-	resp, err := m.httpClient.Do(req)
-	if err != nil {
-		return Tokens{}, fmt.Errorf("%w: %v", ErrRefreshTransient, err)
-	}
-	defer resp.Body.Close()
-
-	body, _ := io.ReadAll(resp.Body)
-
-	if resp.StatusCode >= 500 {
-		return Tokens{}, fmt.Errorf("%w: token endpoint %d: %s", ErrRefreshTransient, resp.StatusCode, string(body))
-	}
-	if resp.StatusCode != 200 {
-		// 4xx — refresh token rejected. Caller needs to re-login.
-		return Tokens{}, fmt.Errorf("%w: token endpoint %d: %s", ErrRefreshPermanent, resp.StatusCode, string(body))
-	}
-
-	var parsed struct {
-		AccessToken  string `json:"access_token"`
-		RefreshToken string `json:"refresh_token"`
-		ExpiresIn    int    `json:"expires_in"`
-	}
-	if err := json.Unmarshal(body, &parsed); err != nil {
-		return Tokens{}, fmt.Errorf("%w: parse token response: %v", ErrRefreshTransient, err)
-	}
-	if parsed.AccessToken == "" {
-		return Tokens{}, fmt.Errorf("%w: token endpoint returned empty access_token", ErrRefreshPermanent)
-	}
-	// Some providers omit refresh_token on refresh (no rotation). Keep the old one.
-	if parsed.RefreshToken == "" {
-		parsed.RefreshToken = refreshToken
-	}
-	return Tokens{
-		AccessToken:  parsed.AccessToken,
-		RefreshToken: parsed.RefreshToken,
-		ExpiresIn:    parsed.ExpiresIn,
-	}, nil
 }
 
 // newerOnDisk loads the persisted tokens for st and reports whether they

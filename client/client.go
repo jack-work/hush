@@ -154,6 +154,11 @@ type OAuthRegisterRequest struct {
 	AccessToken  string
 	RefreshToken string
 	ExpiresIn    int
+	// Grant selects the minting strategy: "" or "refresh_token" for the
+	// OAuth refresh grant, "copilot" for the GitHub Copilot exchange.
+	// Grants that mint on register (exchanges) need only RefreshToken —
+	// the durable secret — and TokenURL.
+	Grant string
 }
 
 // OAuthRegister installs (or replaces) an OAuth credential. The agent
@@ -172,6 +177,7 @@ func (c *Client) OAuthRegister(req OAuthRegisterRequest) error {
 			AccessToken:  req.AccessToken,
 			RefreshToken: req.RefreshToken,
 			ExpiresIn:    req.ExpiresIn,
+			Grant:        req.Grant,
 		},
 	})
 	if err != nil {
@@ -184,28 +190,42 @@ func (c *Client) OAuthRegister(req OAuthRegisterRequest) error {
 // never blocks on refresh; if the cached token has expired, the caller is
 // expected to detect the 401 from the provider and call OAuthRefresh.
 func (c *Client) OAuthGet(name string) (string, error) {
+	tok, _, err := c.OAuthGetFull(name)
+	return tok, err
+}
+
+// OAuthGetFull returns the cached access token together with the metadata
+// minted alongside it — for an exchange grant, the endpoint the token must
+// be spent at. Same non-blocking contract as OAuthGet.
+func (c *Client) OAuthGetFull(name string) (string, map[string]string, error) {
 	resp, err := c.rpc(agent.Request{Op: "oauth_get", OAuth: &agent.OAuthRequest{Name: name}})
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
 	if err := checkResp(resp); err != nil {
-		return "", err
+		return "", nil, err
 	}
-	return resp.Token, nil
+	return resp.Token, resp.Metadata, nil
 }
 
 // OAuthRefresh forces a refresh for the given name (coalescing with any
 // in-flight refresh for the same config) and returns the new access token.
 // Use this when the provider rejects the cached access token.
 func (c *Client) OAuthRefresh(name string) (string, error) {
+	tok, _, err := c.OAuthRefreshFull(name)
+	return tok, err
+}
+
+// OAuthRefreshFull forces a mint and returns the new token with its metadata.
+func (c *Client) OAuthRefreshFull(name string) (string, map[string]string, error) {
 	resp, err := c.rpc(agent.Request{Op: "oauth_refresh", OAuth: &agent.OAuthRequest{Name: name}})
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
 	if err := checkResp(resp); err != nil {
-		return "", err
+		return "", nil, err
 	}
-	return resp.Token, nil
+	return resp.Token, resp.Metadata, nil
 }
 
 // OAuthDelete removes the on-disk and in-memory state for a credential.

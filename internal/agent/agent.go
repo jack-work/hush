@@ -279,6 +279,7 @@ func (a *Agent) handleOAuthRegister(req Request) []byte {
 		RedirectURI:  o.RedirectURI,
 		ClientID:     o.ClientID,
 		Scopes:       o.Scopes,
+		Grant:        o.Grant,
 	}, oauth.Tokens{
 		AccessToken:  o.AccessToken,
 		RefreshToken: o.RefreshToken,
@@ -297,11 +298,11 @@ func (a *Agent) handleOAuthGet(req Request) []byte {
 	if req.OAuth == nil || req.OAuth.Name == "" {
 		return errResponseCoded("oauth: name required", ErrCodeOAuthBadRequest)
 	}
-	tok, err := a.oauth.Get(req.OAuth.Name)
+	tok, meta, err := a.oauth.GetFull(req.OAuth.Name)
 	if err != nil {
 		return errResponseCoded(err.Error(), oauthErrCode(err))
 	}
-	return okResponse(Response{Token: tok})
+	return okResponse(Response{Token: tok, Metadata: meta})
 }
 
 func (a *Agent) handleOAuthRefresh(req Request) []byte {
@@ -311,11 +312,11 @@ func (a *Agent) handleOAuthRefresh(req Request) []byte {
 	if req.OAuth == nil || req.OAuth.Name == "" {
 		return errResponseCoded("oauth: name required", ErrCodeOAuthBadRequest)
 	}
-	tok, err := a.oauth.Refresh(req.OAuth.Name)
+	tok, meta, err := a.oauth.RefreshFull(req.OAuth.Name)
 	if err != nil {
 		return errResponseCoded(err.Error(), oauthErrCode(err))
 	}
-	return okResponse(Response{Token: tok})
+	return okResponse(Response{Token: tok, Metadata: meta})
 }
 
 func (a *Agent) handleOAuthDelete(req Request) []byte {

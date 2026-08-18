@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"github.com/jack-work/hush/internal/agent"
+	"github.com/jack-work/hush/internal/oauth"
 )
 
 // Client talks to a running hush agent over a unix socket.
@@ -160,6 +161,19 @@ type OAuthRegisterRequest struct {
 	// the durable secret — and TokenURL.
 	Grant string
 }
+
+// Grant names, re-exported so consumers can name a minting strategy
+// without guessing the string. A credential registered with no grant is
+// refresh_token, which is what every credential written before grants
+// existed already is.
+const (
+	GrantRefreshToken = oauth.GrantRefreshToken
+	GrantCopilot      = oauth.GrantCopilot
+)
+
+// MetaAPIBase is the metadata key an exchange grant uses to name the API
+// host its token must be spent at.
+const MetaAPIBase = oauth.CopilotAPIBaseKey
 
 // OAuthRegister installs (or replaces) an OAuth credential. The agent
 // persists the encrypted tokens, kicks off proactive refresh, and exposes

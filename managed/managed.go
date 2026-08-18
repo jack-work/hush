@@ -33,12 +33,14 @@ package managed
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 
 	"golang.org/x/term"
@@ -439,6 +441,56 @@ func (h *Hush) startExternal() error {
 
 // VerifyPassphrase reports whether pp decrypts the on-disk identity,
 // without retaining the key material. The buffer is left intact.
+// EnsureGrant guarantees the RUNNING agent understands a grant, restarting
+// it if it does not.
+//
+// A managed agent OUTLIVES THE BINARY THAT SPAWNED IT. In embedded mode the
+// consumer re-execs itself to serve as the agent, and that process keeps
+// running across upgrades of the consumer: so a freshly installed binary
+// can be talking to an agent built from the previous release, which answers
+// a request it has never heard of with a bad-request error. That is a
+// puzzle for whoever reads it, and it is not the caller's bug.
+//
+// In embedded mode the agent is our own child, holds no state a restart
+// loses (everything durable is on disk, encrypted), and comes back as the
+// current binary — so a stale one is simply restarted. An EXTERNAL agent
+// belongs to the user or to a service manager; killing it is not ours to
+// do, so the error says what to run instead.
+func (h *Hush) EnsureGrant(grant string) error {
+	ok, err := h.Client().SupportsGrant(grant)
+	if err != nil {
+		return fmt.Errorf("hush: ask the agent what it supports: %w", err)
+	}
+	if ok {
+		return nil
+	}
+	if h.Mode() != ModeEmbedded {
+		return fmt.Errorf("the running hush agent does not support the %q grant; "+
+			"it predates this build. Restart it and retry: hush down && hush up", grant)
+	}
+	if err := h.Client().Shutdown(); err != nil && !agentAlreadyGone(err) {
+		return fmt.Errorf("hush: stop the stale agent: %w", err)
+	}
+	if err := h.EnsureReady(); err != nil {
+		return fmt.Errorf("hush: restart the agent: %w", err)
+	}
+	ok, err = h.Client().SupportsGrant(grant)
+	if err != nil {
+		return fmt.Errorf("hush: re-ask the restarted agent: %w", err)
+	}
+	if !ok {
+		return fmt.Errorf("the hush agent still does not support the %q grant after a restart", grant)
+	}
+	return nil
+}
+
+// agentAlreadyGone reports whether a shutdown failed because there was
+// nothing left to shut down: someone else already restarted it, which is
+// the outcome we wanted.
+func agentAlreadyGone(err error) bool {
+	return errors.Is(err, syscall.ENOENT) || errors.Is(err, syscall.ECONNREFUSED)
+}
+
 func (h *Hush) VerifyPassphrase(pp []byte) error {
 	id, err := identity.Unlock(h.cfg.IdentityFile, pp)
 	if err == nil {

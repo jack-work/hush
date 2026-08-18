@@ -51,6 +51,13 @@ type Response struct {
 	Values       map[string]string `json:"values,omitempty"`        // decrypt/encrypt
 	TTLRemaining string            `json:"ttl_remaining,omitempty"` // status
 	Version      string            `json:"version,omitempty"`       // version
+	// Grants are the minting strategies this agent understands. An AGENT
+	// OUTLIVES THE BINARY THAT SPAWNED IT: an embedded agent keeps serving
+	// after its consumer is upgraded, so "which hush am I actually talking
+	// to" is a question a client must be able to ask. Version cannot answer
+	// it (an embedded agent reports its consumer's build, or "dev"), so
+	// capabilities are reported directly.
+	Grants []string `json:"grants,omitempty"` // version
 
 	Token string   `json:"token,omitempty"` // oauth_get, oauth_refresh
 	Names []string `json:"names,omitempty"` // oauth_list

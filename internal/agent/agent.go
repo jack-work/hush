@@ -371,7 +371,7 @@ func firstX25519Recipient(ids []age.Identity) age.Recipient {
 }
 
 func (a *Agent) handleVersion() []byte {
-	return okResponse(Response{Version: version.Version})
+	return okResponse(Response{Version: version.Version, Grants: oauth.GrantNames()})
 }
 
 func (a *Agent) handleStatus() []byte {

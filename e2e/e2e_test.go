@@ -363,3 +363,38 @@ func TestCopilotExchangeLifecycle(t *testing.T) {
 	}
 	agent2.Wait()
 }
+
+// TestAgentReportsCapabilities: a client must be able to ask a RUNNING
+// agent what it can do. An embedded agent outlives the binary that spawned
+// it, so "I registered a copilot credential and got 'client_id is required'"
+// is a stale agent, not a bad request — and only a capability probe can tell
+// those apart.
+func TestAgentReportsCapabilities(t *testing.T) {
+	w := newWorld(t)
+	agent := w.startAgent(t)
+	defer func() {
+		w.command("down").Run()
+		agent.Wait()
+	}()
+
+	c := w.client()
+	grants, err := c.Grants()
+	if err != nil {
+		t.Fatalf("grants: %v", err)
+	}
+	if len(grants) == 0 {
+		t.Fatal("agent reported no grants at all")
+	}
+	for _, want := range []string{client.GrantRefreshToken, client.GrantCopilot} {
+		ok, err := c.SupportsGrant(want)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !ok {
+			t.Fatalf("agent does not report %q; has %v", want, grants)
+		}
+	}
+	if ok, _ := c.SupportsGrant("wishful"); ok {
+		t.Fatal("agent claims a grant it does not have")
+	}
+}

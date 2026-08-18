@@ -127,6 +127,38 @@ func (c *Client) Version() (string, error) {
 }
 
 // Ping checks whether the agent is alive and responding.
+// Grants lists the minting strategies the RUNNING agent understands.
+//
+// Ask before assuming: an embedded agent is spawned by its consumer and
+// then outlives it, so a freshly installed binary can be talking to an
+// agent from two releases ago. A missing grant here is not a bad request,
+// it is a stale agent, and the cure is to restart it rather than to
+// re-register anything.
+func (c *Client) Grants() ([]string, error) {
+	resp, err := c.rpc(agent.Request{Op: "version"})
+	if err != nil {
+		return nil, err
+	}
+	if err := checkResp(resp); err != nil {
+		return nil, err
+	}
+	return resp.Grants, nil
+}
+
+// SupportsGrant reports whether the running agent knows a grant.
+func (c *Client) SupportsGrant(name string) (bool, error) {
+	grants, err := c.Grants()
+	if err != nil {
+		return false, err
+	}
+	for _, g := range grants {
+		if g == name {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
 func (c *Client) Ping() error {
 	_, err := c.Status()
 	return err

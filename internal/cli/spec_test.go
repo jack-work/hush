@@ -124,3 +124,63 @@ func TestSecretEnvMissingSecretIsAnError(t *testing.T) {
 		t.Fatalf("a declared-but-absent secret must fail loudly, got %v", err)
 	}
 }
+
+func TestOAuthSpecValidation(t *testing.T) {
+	dir := writeCmdDir(t, "herald", map[string]string{
+		"command.toml": "exec = \"/usr/bin/herald\"\n\n[oauth]\nherald = \"HERALD_TOKEN\"\n",
+	})
+	spec, err := LoadSpec(dir)
+	if err != nil {
+		t.Fatalf("LoadSpec: %v", err)
+	}
+	if !spec.NeedsOAuth() || spec.OAuth["herald"] != "HERALD_TOKEN" {
+		t.Errorf("oauth = %v", spec.OAuth)
+	}
+}
+
+// An access token must never be rendered into script text: that is the
+// exposure the whole delivery rework exists to close.
+func TestOAuthRequiresEnvDelivery(t *testing.T) {
+	dir := writeCmdDir(t, "bad", map[string]string{
+		"command.toml": "delivery = \"script\"\n\n[oauth]\nherald = \"HERALD_TOKEN\"\n",
+	})
+	_, err := LoadSpec(dir)
+	if err == nil || !strings.Contains(err.Error(), "oauth requires delivery") {
+		t.Fatalf("expected rejection, got %v", err)
+	}
+}
+
+func TestOAuthAndSecretCannotCollide(t *testing.T) {
+	dir := writeCmdDir(t, "clash", map[string]string{
+		"command.toml": "delivery = \"env\"\n[secrets]\na = \"TOKEN\"\n[oauth]\nb = \"TOKEN\"\n",
+	})
+	if _, err := LoadSpec(dir); err == nil || !strings.Contains(err.Error(), "both map to") {
+		t.Fatalf("expected collision rejection, got %v", err)
+	}
+}
+
+func TestOAuthEnvResolvesThroughTheAgent(t *testing.T) {
+	spec := &Spec{Delivery: DeliveryEnv, OAuth: map[string]string{"herald": "HERALD_TOKEN"}}
+	env, err := spec.OAuthEnv(func(name string) (string, error) {
+		if name != "herald" {
+			t.Errorf("resolver asked for %q", name)
+		}
+		return "access-token-xyz", nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(env) != 1 || env[0] != "HERALD_TOKEN=access-token-xyz" {
+		t.Errorf("env = %v", env)
+	}
+}
+
+// A CLI that has never logged in should be told what to do, not handed an
+// empty credential that fails later as an opaque 401.
+func TestOAuthEnvErrorNamesTheLogin(t *testing.T) {
+	spec := &Spec{Delivery: DeliveryEnv, OAuth: map[string]string{"herald": "HERALD_TOKEN"}}
+	_, err := spec.OAuthEnv(func(string) (string, error) { return "", nil })
+	if err == nil || !strings.Contains(err.Error(), "hush oauth login herald") {
+		t.Fatalf("error should name the remedy, got %v", err)
+	}
+}

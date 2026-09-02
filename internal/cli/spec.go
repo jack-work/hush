@@ -57,6 +57,17 @@ type Spec struct {
 	// child should see it under: token = "BRAVE_TOKEN".
 	Secrets map[string]string `toml:"secrets"`
 
+	// OAuth maps a hush oauth credential name to an environment variable:
+	// herald = "HERALD_TOKEN".
+	//
+	// Unlike Secrets, which are static and permanent, these are short-lived
+	// access tokens the agent refreshes. That difference is the whole point:
+	// a static key leaked into a log or a transcript is a leak until you
+	// notice and rotate by hand, while an access token expires before you
+	// finish reading it. Prefer this shape wherever the upstream supports
+	// it.
+	OAuth map[string]string `toml:"oauth"`
+
 	// Timeout kills the child if it outlives the duration. Zero means wait
 	// forever, which is the historical behavior.
 	Timeout Duration `toml:"timeout"`
@@ -90,6 +101,9 @@ func (s *Spec) Scriptless() bool { return s.Exec != "" }
 func (s *Spec) EnvDelivery() bool {
 	return s.Delivery == DeliveryEnv || s.Scriptless()
 }
+
+// NeedsOAuth reports whether this command draws on a hush oauth credential.
+func (s *Spec) NeedsOAuth() bool { return len(s.OAuth) > 0 }
 
 // LoadSpec reads command.toml from a command directory. A missing file is
 // not an error: it yields the legacy default.
@@ -153,10 +167,57 @@ func (s *Spec) Validate() error {
 		}
 		seen[envName] = key
 	}
+	for name, envName := range s.OAuth {
+		if name == "" {
+			return fmt.Errorf("oauth: empty credential name")
+		}
+		if envName == "" {
+			return fmt.Errorf("oauth.%s: empty environment variable name", name)
+		}
+		if strings.ContainsAny(envName, "= \t\n\x00") {
+			return fmt.Errorf("oauth.%s = %q: not a valid environment variable name", name, envName)
+		}
+		if prev, dup := seen[envName]; dup {
+			return fmt.Errorf("oauth.%s and secrets.%s both map to %s", name, prev, envName)
+		}
+		seen[envName] = name
+	}
+	if len(s.OAuth) > 0 && !s.EnvDelivery() {
+		return fmt.Errorf("oauth requires delivery = %q or exec: an access token must not be rendered into script text", DeliveryEnv)
+	}
 	if s.Timeout.Duration < 0 {
 		return fmt.Errorf("timeout = %s: must not be negative", s.Timeout.Duration)
 	}
 	return nil
+}
+
+// OAuthEnv resolves each declared oauth credential to a current access
+// token through the agent.
+//
+// get is the resolver (client.OAuthGet). Errors name the credential, since
+// the usual cause is simply that the CLI has never logged in.
+func (s *Spec) OAuthEnv(get func(string) (string, error)) ([]string, error) {
+	if len(s.OAuth) == 0 {
+		return nil, nil
+	}
+	names := make([]string, 0, len(s.OAuth))
+	for n := range s.OAuth {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+
+	out := make([]string, 0, len(names))
+	for _, n := range names {
+		tok, err := get(n)
+		if err != nil {
+			return nil, fmt.Errorf("oauth credential %q: %w (try: hush oauth login %s)", n, err, n)
+		}
+		if tok == "" {
+			return nil, fmt.Errorf("oauth credential %q has no access token (try: hush oauth login %s)", n, n)
+		}
+		out = append(out, s.OAuth[n]+"="+tok)
+	}
+	return out, nil
 }
 
 // SecretEnv maps decrypted values onto the environment names this spec

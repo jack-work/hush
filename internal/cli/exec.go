@@ -23,12 +23,22 @@ import (
 // silently rendering an empty credential.
 //
 // The returned cleanup must always be called, even on error.
-func buildChild(spec *Spec, name, scriptName, script string, values map[string]string, extra []string) (*exec.Cmd, func(), error) {
+func buildChild(spec *Spec, name, scriptName, script string, values map[string]string, extra []string, oauth func(string) (string, error)) (*exec.Cmd, func(), error) {
 	noop := func() {}
 
 	secretEnv, err := spec.SecretEnv(values)
 	if err != nil {
 		return nil, noop, err
+	}
+	if spec.NeedsOAuth() {
+		if oauth == nil {
+			return nil, noop, fmt.Errorf("command declares [oauth] but no resolver is available")
+		}
+		tokenEnv, err := spec.OAuthEnv(oauth)
+		if err != nil {
+			return nil, noop, err
+		}
+		secretEnv = append(secretEnv, tokenEnv...)
 	}
 
 	if spec.Scriptless() {

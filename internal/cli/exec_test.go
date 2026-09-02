@@ -35,7 +35,7 @@ func TestScriptIsNotVisibleInChildCmdline(t *testing.T) {
 	script := "cat /proc/$$/cmdline | tr '\\0' ' '; echo; echo TOKEN_WAS={{.token}} >/dev/null"
 
 	cmd, cleanup, err := buildChild(spec, "canary", "command.sh", script,
-		map[string]string{"token": secret}, nil)
+		map[string]string{"token": secret}, nil, nil)
 	defer cleanup()
 	if err != nil {
 		t.Fatal(err)
@@ -55,7 +55,7 @@ func TestScriptIsNotVisibleInChildCmdline(t *testing.T) {
 func TestLegacyScriptDeliveryStillRendersSecrets(t *testing.T) {
 	spec := &Spec{Delivery: DeliveryScript}
 	cmd, cleanup, err := buildChild(spec, "legacy", "command.sh",
-		"echo got={{.token}}", map[string]string{"token": "abc123"}, nil)
+		"echo got={{.token}}", map[string]string{"token": "abc123"}, nil, nil)
 	defer cleanup()
 	if err != nil {
 		t.Fatal(err)
@@ -71,7 +71,7 @@ func TestCallerArgumentsAreNotProgramText(t *testing.T) {
 	spec := &Spec{Delivery: DeliveryScript}
 	payload := `'; echo PWNED; '`
 	cmd, cleanup, err := buildChild(spec, "args", "command.sh",
-		`printf 'arg=[%s]\n' "$1"`, nil, []string{payload})
+		`printf 'arg=[%s]\n' "$1"`, nil, []string{payload}, nil)
 	defer cleanup()
 	if err != nil {
 		t.Fatal(err)
@@ -92,7 +92,7 @@ func TestCallerArgumentsAreNotProgramText(t *testing.T) {
 func TestEnvDeliveryPutsSecretInEnvironmentNotScript(t *testing.T) {
 	spec := &Spec{Delivery: DeliveryEnv, Secrets: map[string]string{"token": "MY_TOKEN"}}
 	cmd, cleanup, err := buildChild(spec, "envcmd", "command.sh",
-		`echo token=$MY_TOKEN`, map[string]string{"token": "xyz789"}, nil)
+		`echo token=$MY_TOKEN`, map[string]string{"token": "xyz789"}, nil, nil)
 	defer cleanup()
 	if err != nil {
 		t.Fatal(err)
@@ -107,7 +107,7 @@ func TestEnvDeliveryPutsSecretInEnvironmentNotScript(t *testing.T) {
 func TestEnvDeliveryRejectsLeftoverSecretTemplate(t *testing.T) {
 	spec := &Spec{Delivery: DeliveryEnv, Secrets: map[string]string{"token": "MY_TOKEN"}}
 	_, cleanup, err := buildChild(spec, "stale", "command.sh",
-		`echo token={{.token}}`, map[string]string{"token": "xyz"}, nil)
+		`echo token={{.token}}`, map[string]string{"token": "xyz"}, nil, nil)
 	defer cleanup()
 	if err == nil {
 		t.Fatal("expected an error naming the migration")
@@ -123,7 +123,7 @@ func TestScriptlessExecRunsBinaryWithNoShell(t *testing.T) {
 		Delivery: DeliveryEnv,
 		Args:     []string{"fixed"},
 	}
-	cmd, cleanup, err := buildChild(spec, "echo", "", "", nil, []string{"caller"})
+	cmd, cleanup, err := buildChild(spec, "echo", "", "", nil, []string{"caller"}, nil)
 	defer cleanup()
 	if err != nil {
 		t.Fatal(err)
@@ -143,7 +143,7 @@ func TestScriptlessExecRunsBinaryWithNoShell(t *testing.T) {
 func TestScriptlessExecIsInjectionProof(t *testing.T) {
 	spec := &Spec{Exec: "/bin/echo", Delivery: DeliveryEnv}
 	payloads := []string{"$(echo PWNED)", "`echo PWNED`", "; echo PWNED"}
-	cmd, cleanup, err := buildChild(spec, "echo", "", "", nil, payloads)
+	cmd, cleanup, err := buildChild(spec, "echo", "", "", nil, payloads, nil)
 	defer cleanup()
 	if err != nil {
 		t.Fatal(err)
@@ -186,7 +186,7 @@ func TestChildEnvStripsShimDirFromPath(t *testing.T) {
 
 func TestTimeoutKillsRunawayChild(t *testing.T) {
 	spec := &Spec{Delivery: DeliveryScript}
-	cmd, cleanup, err := buildChild(spec, "sleepy", "command.sh", "sleep 30", nil, nil)
+	cmd, cleanup, err := buildChild(spec, "sleepy", "command.sh", "sleep 30", nil, nil, nil)
 	defer cleanup()
 	if err != nil {
 		t.Fatal(err)

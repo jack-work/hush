@@ -71,7 +71,13 @@ func runCmd(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	child, cleanup, err := buildChild(spec, name, scriptName, string(cmdBytes), values, extra)
+	// OAuth credentials are resolved lazily, so a command that declares
+	// none never wakes the agent for them.
+	oauthResolver := func(credential string) (string, error) {
+		return client.NewWithSocket(filepath.Join(cfg.RuntimeDir, "agent.sock")).OAuthGet(credential)
+	}
+
+	child, cleanup, err := buildChild(spec, name, scriptName, string(cmdBytes), values, extra, oauthResolver)
 	defer cleanup()
 	if err != nil {
 		return err

@@ -24,18 +24,26 @@ func commandScriptNames() []string {
 // where the semantics match Unix. PowerShell's -Command and cmd's /C have
 // no equivalent positional convention, so .ps1 and .cmd scripts continue
 // to read extra args through the {{.Args}} template accessor.
-func shellCommand(rendered, scriptName, argv0 string, args []string) *exec.Cmd {
+//
+// Windows has no memfd and no /dev/fd, so the rendered text is still passed
+// as an argument here. On Windows a process's command line is readable by
+// the same user (and by administrators), not world-readable as /proc is on
+// Linux — but env delivery is still the safer shape and is preferred.
+//
+// The returned cleanup exists to match the Unix signature and does nothing.
+func shellCommand(rendered, scriptName, argv0 string, args []string) (*exec.Cmd, func(), error) {
+	noop := func() {}
 	switch filepath.Ext(scriptName) {
 	case ".ps1":
 		ps := "powershell.exe"
 		if p, err := exec.LookPath("pwsh"); err == nil {
 			ps = p
 		}
-		return exec.Command(ps, "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", rendered)
+		return exec.Command(ps, "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", rendered), noop, nil
 	case ".sh":
 		sh := append([]string{"-c", rendered, argv0}, args...)
-		return exec.Command("sh", sh...)
+		return exec.Command("sh", sh...), noop, nil
 	default: // .cmd and anything else
-		return exec.Command("cmd.exe", "/C", rendered)
+		return exec.Command("cmd.exe", "/C", rendered), noop, nil
 	}
 }

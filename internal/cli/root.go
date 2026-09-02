@@ -36,6 +36,31 @@ func init() {
 }
 
 func Execute() {
+	// Shim dispatch: when argv[0] is not "hush", we were invoked through a
+	// symlink named after a hush command. Rewrite to `hush -- <name> <args>`
+	// so the caller's arguments pass through untouched. This must happen
+	// before cobra sees anything, and before any flag parsing: a shimmed
+	// tool's own flags are its business, not ours.
+	// shimCommandName needs the configured shims directory, and cobra has
+	// not run PersistentPreRunE yet. Load config early; a failure here is
+	// not fatal, it just means no shim dispatch.
+	if cfg == nil {
+		if c, err := config.Load(); err == nil {
+			cfg = c
+		}
+	}
+	if len(os.Args) > 0 {
+		if name := shimCommandName(os.Args[0]); name != "" {
+			rewritten := []string{os.Args[0], "--", name}
+			os.Args = append(rewritten, os.Args[1:]...)
+			if err := rootCmd.Execute(); err != nil {
+				fmt.Fprintln(os.Stderr, err)
+				os.Exit(1)
+			}
+			return
+		}
+	}
+
 	// Cobra doesn't natively route unknown subcommands to RunE — it errors.
 	// Intercept: if the first arg looks like an unknown subcommand (not a flag,
 	// not a built-in), rewrite it as a positional arg by inserting "--".

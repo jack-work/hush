@@ -192,7 +192,16 @@ func exchangeCode(tokenURL, clientID, code, state, redirectURI, verifier string)
 	}, nil
 }
 
+// openBrowser makes a best effort and never fails a login: on a headless
+// box there is nothing to open, and the URL has already been printed. That
+// matters for the device flow, whose whole point is working where no
+// browser exists.
 func openBrowser(target string) {
+	if runtime.GOOS == "linux" &&
+		strings.TrimSpace(os.Getenv("DISPLAY")) == "" &&
+		strings.TrimSpace(os.Getenv("WAYLAND_DISPLAY")) == "" {
+		return
+	}
 	var cmd *exec.Cmd
 	switch runtime.GOOS {
 	case "darwin":

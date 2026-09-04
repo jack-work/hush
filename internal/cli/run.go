@@ -74,7 +74,15 @@ func runCmd(cmd *cobra.Command, args []string) error {
 	// OAuth credentials are resolved lazily, so a command that declares
 	// none never wakes the agent for them.
 	oauthResolver := func(credential string) (string, error) {
-		return client.NewWithSocket(filepath.Join(cfg.RuntimeDir, "agent.sock")).OAuthGet(credential)
+		sockPath := filepath.Join(cfg.RuntimeDir, "agent.sock")
+		// Start the agent if it is not up, exactly as the secrets path does.
+		// Without this, any command whose credentials are entirely OAuth
+		// fails the moment the agent's TTL lapses — which for a long-running
+		// unit means dying on a timer.
+		if err := ensureAgent(sockPath); err != nil {
+			return "", err
+		}
+		return client.NewWithSocket(sockPath).OAuthGet(credential)
 	}
 
 	child, cleanup, err := buildChild(spec, name, scriptName, string(cmdBytes), values, extra, oauthResolver)

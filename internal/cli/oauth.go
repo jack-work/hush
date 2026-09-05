@@ -13,6 +13,7 @@ import (
 	"golang.org/x/term"
 
 	"github.com/jack-work/hush/client"
+	"github.com/jack-work/hush/internal/agent"
 )
 
 func init() {
@@ -252,7 +253,25 @@ func connectAgent() (*client.Client, error) {
 	if err := c.Ping(); err == nil {
 		return c, nil
 	}
-	if err := ensureAgent(filepath.Join(cfg.RuntimeDir, "agent.sock")); err != nil {
+
+	sockPath := filepath.Join(cfg.RuntimeDir, "agent.sock")
+
+	// Only self-start when nothing is already listening on that path.
+	//
+	// If a systemd socket unit holds it, starting our own agent squats the
+	// path: systemd later rebinds it, our agent survives on an orphaned inode
+	// nobody can reach, and the activated agent cannot take the flock. Every
+	// consumer on the box goes blind. A self-started agent also inherits the
+	// CALLER's cgroup, so restarting one service would kill the credential
+	// agent shared by all of them.
+	//
+	// SocketIsListening asks passively; dialing would start the very thing
+	// being asked about.
+	if agent.SocketIsListening(sockPath) {
+		return nil, fmt.Errorf("hush agent socket at %s is held but not answering; "+
+			"a socket unit is armed, so check: systemctl --user status hush-agent.service", sockPath)
+	}
+	if err := ensureAgent(sockPath); err != nil {
 		return nil, fmt.Errorf("hush agent is not running and could not be started: %w", err)
 	}
 	c, err = client.New()

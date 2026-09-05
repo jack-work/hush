@@ -14,7 +14,7 @@ import (
 // process that will run, in one of two shapes.
 //
 // Scriptless (spec.Exec set): the binary is executed directly. No shell, no
-// template, no interpreter — caller arguments are argv elements and cannot
+// template, no interpreter: caller arguments are argv elements and cannot
 // become program text. This is the preferred shape.
 //
 // Script: the command script is rendered as a template and handed to sh.

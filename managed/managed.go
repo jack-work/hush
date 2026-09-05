@@ -47,9 +47,9 @@ import (
 
 	"github.com/zalando/go-keyring"
 
-	"github.com/jack-work/hush/internal/agent"
 	"github.com/jack-work/hush/client"
 	"github.com/jack-work/hush/config"
+	"github.com/jack-work/hush/internal/agent"
 	"github.com/jack-work/hush/internal/identity"
 	"github.com/jack-work/hush/internal/unlock"
 )

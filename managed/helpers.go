@@ -7,8 +7,8 @@ import (
 
 	"filippo.io/age"
 
-	"github.com/jack-work/hush/internal/identity"
 	"github.com/jack-work/hush/config"
+	"github.com/jack-work/hush/internal/identity"
 )
 
 // initIdentity generates a new age keypair and encrypts it with the given
@@ -51,4 +51,3 @@ func initIdentity(cfg *config.Config, passphrase []byte) (string, error) {
 
 	return pubkey, nil
 }
-

@@ -18,12 +18,12 @@ const SpecFile = "command.toml"
 // Delivery names how a command's decrypted secrets reach the process that
 // uses them.
 //
-//	script — secrets are rendered into the script text through {{.name}}.
+//	script: secrets are rendered into the script text through {{.name}}.
 //	         The legacy default. Kept working forever, but it means the
 //	         plaintext lives inside a program that an interpreter parses,
 //	         which is how caller data and secret data end up in the same
 //	         lexer.
-//	env    — secrets never touch the script. Each is placed in the child's
+//	env: secrets never touch the script. Each is placed in the child's
 //	         environment under a name the command declares, and the script
 //	         (or binary) reads it as "$VAR".
 const (
@@ -44,7 +44,7 @@ type Spec struct {
 	// the path. Must be absolute: a bare name would resolve through PATH,
 	// and PATH is exactly what shims manipulate.
 	//
-	// When set, no command script is read and Delivery is implicitly "env" —
+	// When set, no command script is read and Delivery is implicitly "env",
 	// there is no script for a secret to be rendered into.
 	Exec string `toml:"exec"`
 
@@ -221,7 +221,7 @@ func (s *Spec) OAuthEnv(get func(string) (string, error)) ([]string, error) {
 }
 
 // SecretEnv maps decrypted values onto the environment names this spec
-// declares. A declared key with no matching secret is an error — silently
+// declares. A declared key with no matching secret is an error: silently
 // handing a child an empty credential produces a confusing failure much
 // later, usually as an opaque 401.
 func (s *Spec) SecretEnv(values map[string]string) ([]string, error) {

@@ -24,7 +24,7 @@ const scriptFD = 3
 //
 // The rendered text may contain decrypted secrets, so it is passed on an
 // anonymous file descriptor rather than as an argument. This matters: argv
-// is exposed through /proc/<pid>/cmdline, which is mode 444 — world
+// is exposed through /proc/<pid>/cmdline, which is mode 444: world
 // readable by every user and every process on the box, for as long as the
 // command runs. A memfd has no path, never touches a filesystem, is not
 // visible in /proc/<pid>/cmdline, and dies with the process.
@@ -56,7 +56,7 @@ func shellCommand(rendered, scriptName, argv0 string, args []string) (*exec.Cmd,
 // Preferred: an anonymous in-memory file (memfd_create), which has no name
 // in any namespace. Fallback for kernels and platforms without memfd: a
 // temp file unlinked immediately after creation, so it has no reachable
-// path either — weaker only in that its bytes may touch a filesystem.
+// path either: weaker only in that its bytes may touch a filesystem.
 func scriptFile(content string) (*os.File, error) {
 	if fd, err := unix.MemfdCreate("hush-script", unix.MFD_CLOEXEC); err == nil {
 		f := os.NewFile(uintptr(fd), "hush-script")

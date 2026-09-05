@@ -14,7 +14,7 @@ import (
 //
 // Device flow is the right shape for a command-line tool: no redirect URI,
 // no localhost listener, no port to bind. The user is shown a short code and
-// approves it on whatever device has a browser — which is what makes it work
+// approves it on whatever device has a browser: which is what makes it work
 // over SSH, on a headless box, or from a container, none of which an
 // authorization-code redirect survives.
 //
@@ -145,7 +145,7 @@ func RequestDeviceCode(ctx context.Context, doer httpDoer, endpoint, clientID, s
 		// An unknown client_id yields a flat 400 that reads like a malformed
 		// request, so say what it usually means.
 		if e.Err == "invalid_client" || e.Err == "invalid_request" {
-			return nil, fmt.Errorf("device authorization refused (%s: %s) — "+
+			return nil, fmt.Errorf("device authorization refused (%s: %s), "+
 				"is %q registered at this issuer, with the device_code grant enabled?",
 				e.Err, e.Desc, clientID)
 		}
@@ -180,7 +180,7 @@ type oauthError struct {
 // user who approves instantly should not pay a fixed interval for the
 // privilege.
 //
-// RFC 8628 defines the two errors that are not failures — authorization_pending
+// RFC 8628 defines the two errors that are not failures: authorization_pending
 // (keep waiting) and slow_down (keep waiting, but back off). Everything else
 // is terminal.
 func PollDeviceToken(ctx context.Context, doer httpDoer, tokenEndpoint, clientID string, da *DeviceAuth) (Tokens, error) {

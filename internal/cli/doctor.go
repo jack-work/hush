@@ -13,7 +13,7 @@ import (
 )
 
 // `hush doctor` reports, per command, how its credentials reach the process
-// that uses them — the worklist for migrating off script-embedded secrets.
+// that uses them: the worklist for migrating off script-embedded secrets.
 //
 // Nothing here rewrites anything. Shell quoting is context-sensitive enough
 // that a mechanical rewrite of {{.token}} inside single quotes would produce
@@ -66,9 +66,9 @@ func (d diagnosis) worst() level {
 }
 
 var (
-	// {{.Args}} / {{index .Args 0}} — caller data rendered into program text.
+	// {{.Args}} / {{index.Args 0}}, caller data rendered into program text.
 	reTemplateArgs = regexp.MustCompile(`{{-?\s*(?:index\s+)?\.Args\b`)
-	// {{.name}} for any name that is not a builtin — a secret reference.
+	// {{.name}} for any name that is not a builtin: a secret reference.
 	reTemplateField = regexp.MustCompile(`{{-?\s*\.([A-Za-z_][A-Za-z0-9_]*)`)
 )
 
@@ -161,7 +161,7 @@ func diagnose(name string) (diagnosis, error) {
 
 	if reTemplateArgs.MatchString(script) {
 		d.findings = append(d.findings, finding{levelWarn,
-			"renders caller arguments into script text ({{.Args}}) — use positional \"$1\" / \"$@\""})
+			"renders caller arguments into script text ({{.Args}}), use positional \"$1\" / \"$@\""})
 	}
 
 	if !spec.EnvDelivery() {
@@ -189,7 +189,7 @@ func diagnose(name string) (diagnosis, error) {
 }
 
 // secretKeyNames returns the key names in a secrets.toml without decrypting
-// anything — doctor never needs the values, and never asks the agent.
+// anything: doctor never needs the values, and never asks the agent.
 func secretKeyNames(path string) (map[string]struct{}, error) {
 	out := map[string]struct{}{}
 	data, err := os.ReadFile(path)
@@ -247,7 +247,7 @@ func migrationHint(d diagnosis) string {
 	return b.String()
 }
 
-// envNameFor suggests HUSH_<COMMAND>_<KEY>, uppercased — a name unlikely to
+// envNameFor suggests HUSH_<COMMAND>_<KEY>, uppercased: a name unlikely to
 // collide with anything already in the environment.
 func envNameFor(cmd, key string) string {
 	clean := func(s string) string {

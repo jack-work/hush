@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -235,13 +236,31 @@ var oauthDeleteCmd = &cobra.Command{
 	},
 }
 
+// connectAgent returns a client to a running agent, starting one if the TTL
+// has lapsed since the last call.
+//
+// Telling the caller to run `hush up -d` is not good enough here. These
+// commands are how a long-running service obtains its bearer token, and the
+// agent's TTL is measured in minutes: a unit that starts healthy would fail a
+// half hour later with advice nobody is present to take. The secrets path has
+// always started the agent on demand; so must this one.
 func connectAgent() (*client.Client, error) {
 	c, err := client.New()
 	if err != nil {
 		return nil, err
 	}
+	if err := c.Ping(); err == nil {
+		return c, nil
+	}
+	if err := ensureAgent(filepath.Join(cfg.RuntimeDir, "agent.sock")); err != nil {
+		return nil, fmt.Errorf("hush agent is not running and could not be started: %w", err)
+	}
+	c, err = client.New()
+	if err != nil {
+		return nil, err
+	}
 	if err := c.Ping(); err != nil {
-		return nil, fmt.Errorf("hush agent is not running. Start it: hush up -d")
+		return nil, fmt.Errorf("hush agent did not answer after starting: %w", err)
 	}
 	return c, nil
 }

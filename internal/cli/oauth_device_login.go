@@ -16,7 +16,7 @@ import (
 
 func init() {
 	f := oauthDeviceLoginCmd.Flags()
-	f.String("issuer", "", "OIDC issuer URL — endpoints are discovered from it (required)")
+	f.String("issuer", "", "OIDC issuer URL: endpoints are discovered from it (required)")
 	f.String("client-id", "", "OAuth client ID (defaults to <name>)")
 	f.String("scopes", "openid profile groups offline_access", "space-separated scopes")
 	f.Bool("no-browser", false, "print the URL instead of opening a browser")
@@ -35,7 +35,7 @@ Endpoints are DISCOVERED from the issuer, so this is all it takes:
 
 Device flow is the right shape for a command-line tool: there is no redirect
 URI, no localhost listener and no port to bind, so it works unchanged over
-SSH, on a headless machine, or in a container — none of which survive an
+SSH, on a headless machine, or in a container: none of which survive an
 authorization-code redirect. You approve a short code on whatever device
 already has a browser.
 
@@ -112,7 +112,7 @@ func runOAuthDeviceLogin(cmd *cobra.Command, args []string) error {
 	if toks.RefreshToken == "" {
 		// Worth saying plainly: without offline_access the credential dies
 		// at the first expiry and the user must log in again.
-		fmt.Fprintf(os.Stderr, "\n\nwarning: no refresh_token was issued — the credential cannot be\n"+
+		fmt.Fprintf(os.Stderr, "\n\nwarning: no refresh_token was issued: the credential cannot be\n"+
 			"renewed and will stop working when the access token expires.\n"+
 			"Request the offline_access scope if the provider supports it.")
 	}

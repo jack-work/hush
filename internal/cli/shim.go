@@ -17,7 +17,7 @@ import (
 //
 // This is what makes a brokered credential invisible to the caller: a script
 // or an agent runs `gh pr list` exactly as it always has, and the token is
-// injected on the way past. Aliases cannot do this — they are not visible to
+// injected on the way past. Aliases cannot do this: they are not visible to
 // #!/bin/sh scripts or to a program that calls exec directly.
 //
 // The pattern is well travelled: ccache shadows gcc this way, pyenv and
@@ -44,7 +44,7 @@ func shimDir() string {
 // Dispatch is deliberately narrow: it fires only when the path we were
 // invoked through lives in the shims directory. Treating *any* argv[0] that
 // isn't "hush" as a command name would hijack every development build,
-// every `hush.test` binary, and every renamed copy — surprising, and a
+// every `hush.test` binary, and every renamed copy: surprising, and a
 // nuisance to debug. A shim is a link we installed, in a directory we own.
 func shimCommandName(argv0 string) string {
 	base := filepath.Base(argv0)
@@ -193,7 +193,7 @@ func runShimList(cmd *cobra.Command, args []string) error {
 		}
 	}
 	if !active {
-		fmt.Fprintf(os.Stderr, "\nnote: %s is not on PATH — these shims are inert.\n", dir)
+		fmt.Fprintf(os.Stderr, "\nnote: %s is not on PATH: these shims are inert.\n", dir)
 	}
 	return nil
 }
@@ -227,7 +227,7 @@ func onPath(dir string) bool {
 	return false
 }
 
-// lookPathExcluding finds name on PATH, ignoring one directory — used to
+// lookPathExcluding finds name on PATH, ignoring one directory: used to
 // report what a shim shadows without finding the shim itself.
 func lookPathExcluding(name, skip string) string {
 	for _, p := range strings.Split(os.Getenv("PATH"), string(os.PathListSeparator)) {

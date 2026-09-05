@@ -95,6 +95,14 @@
               description = "hush agent";
               requires = [ "hush-agent.socket" ];
               after = [ "hush-agent.socket" ];
+              # No start rate limit. Exceeding one stops the socket unit that
+              # triggers this service, so a transient collision (something
+              # self-bound the socket before the unit armed) becomes permanent
+              # silence until a human re-arms it. Without the limit the
+              # collision clears itself when the squatting agent's TTL lapses.
+              # A failed activation is cheap: the single-instance lock is
+              # checked before the identity is unlocked.
+              unitConfig.StartLimitIntervalSec = 0;
               serviceConfig = {
                 Type = "exec";
                 ExecStart = "${lib.getExe cfg.package} up";

@@ -141,6 +141,7 @@ func diagnose(name string) (diagnosis, error) {
 	if spec.Scriptless() {
 		d.delivery = "exec"
 		d.findings = append(d.findings, finding{levelOK, "runs " + spec.Exec + " directly, no interpreter"})
+		d.findings = append(d.findings, envFindings(spec)...)
 		return d, nil
 	}
 
@@ -154,6 +155,7 @@ func diagnose(name string) (diagnosis, error) {
 	if script == "" {
 		d.delivery = "config"
 		d.findings = append(d.findings, finding{levelNote, "config-only: read through the client library"})
+		d.findings = append(d.findings, envFindings(spec)...)
 		return d, nil
 	}
 
@@ -185,7 +187,22 @@ func diagnose(name string) (diagnosis, error) {
 	if len(d.findings) == 0 && spec.EnvDelivery() {
 		d.findings = append(d.findings, finding{levelOK, "secrets delivered through the environment"})
 	}
+	d.findings = append(d.findings, envFindings(spec)...)
 	return d, nil
+}
+
+// envFindings reports the plain [env] a command injects, so an audit of what
+// reaches a child does not require opening command.toml.
+func envFindings(spec *Spec) []finding {
+	if len(spec.Env) == 0 {
+		return nil
+	}
+	names := make([]string, 0, len(spec.Env))
+	for n := range spec.Env {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	return []finding{{levelOK, "plain env set by the spec: " + strings.Join(names, ", ")}}
 }
 
 // secretKeyNames returns the key names in a secrets.toml without decrypting

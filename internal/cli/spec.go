@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -52,6 +53,12 @@ type Spec struct {
 	// passed as argv elements, never concatenated, so a caller cannot
 	// escape from a value position into a flag position.
 	Args []string `toml:"args"`
+
+	// Env is plain, non-secret environment the child is given:
+	// AWS_REQUEST_CHECKSUM_CALCULATION = "WHEN_REQUIRED". Values are
+	// literal, never decrypted, and come from a world-readable file.
+	// Precedence and refusals: docs/command-env.md.
+	Env map[string]string `toml:"env"`
 
 	// Secrets maps a key in secrets.toml to the environment variable the
 	// child should see it under: token = "BRAVE_TOKEN".
@@ -163,9 +170,9 @@ func (s *Spec) Validate() error {
 			return fmt.Errorf("secrets.%s = %q: not a valid environment variable name", key, envName)
 		}
 		if prev, dup := seen[envName]; dup {
-			return fmt.Errorf("secrets.%s and secrets.%s both map to %s", prev, key, envName)
+			return fmt.Errorf("%s and secrets.%s both map to %s", prev, key, envName)
 		}
-		seen[envName] = key
+		seen[envName] = "secrets." + key
 	}
 	for name, envName := range s.OAuth {
 		if name == "" {
@@ -178,9 +185,12 @@ func (s *Spec) Validate() error {
 			return fmt.Errorf("oauth.%s = %q: not a valid environment variable name", name, envName)
 		}
 		if prev, dup := seen[envName]; dup {
-			return fmt.Errorf("oauth.%s and secrets.%s both map to %s", name, prev, envName)
+			return fmt.Errorf("%s and oauth.%s both map to %s", prev, name, envName)
 		}
-		seen[envName] = name
+		seen[envName] = "oauth." + name
+	}
+	if err := s.validateEnv(seen); err != nil {
+		return err
 	}
 	if len(s.OAuth) > 0 && !s.EnvDelivery() {
 		return fmt.Errorf("oauth requires delivery = %q or exec: an access token must not be rendered into script text", DeliveryEnv)
@@ -189,6 +199,91 @@ func (s *Spec) Validate() error {
 		return fmt.Errorf("timeout = %s: must not be negative", s.Timeout.Duration)
 	}
 	return nil
+}
+
+// validateEnv checks [env] against the rules in docs/command-env.md. claimed
+// maps an environment variable name to the table that already owns it.
+func (s *Spec) validateEnv(claimed map[string]string) error {
+	names := make([]string, 0, len(s.Env))
+	for n := range s.Env {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+
+	for _, n := range names {
+		if !reEnvName.MatchString(n) {
+			return fmt.Errorf("env.%q: not a valid environment variable name (want [A-Za-z_][A-Za-z0-9_]*)", n)
+		}
+		if reservedEnv[n] {
+			return fmt.Errorf("env.%s: reserved, hush controls it for every child", n)
+		}
+		if word := credentialWord(n); word != "" {
+			return fmt.Errorf("env.%s: %s belongs in [secrets] or [oauth]; [env] is plaintext on disk", n, word)
+		}
+		v := s.Env[n]
+		if strings.Contains(v, "AGE-ENC[") {
+			return fmt.Errorf("env.%s: an encrypted value belongs in secrets.toml, where hush will decrypt it", n)
+		}
+		if strings.ContainsAny(v, "\x00") {
+			return fmt.Errorf("env.%s: value contains a NUL byte", n)
+		}
+		if owner, dup := claimed[n]; dup {
+			return fmt.Errorf("%s and env.%s both map to %s: a credential must not be shadowed by plain text", owner, n, n)
+		}
+	}
+	return nil
+}
+
+var reEnvName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+
+// reservedEnv names the variables hush sets for the child itself. PATH is the
+// one that matters: the shims directory is stripped from it so a brokered
+// command cannot re-enter hush, and a spec that overwrote PATH would put it
+// back. The loader variables are here because they choose code the child runs.
+var reservedEnv = map[string]bool{
+	"PATH":                  true,
+	"LD_PRELOAD":            true,
+	"LD_LIBRARY_PATH":       true,
+	"LD_AUDIT":              true,
+	"DYLD_INSERT_LIBRARIES": true,
+	"DYLD_LIBRARY_PATH":     true,
+}
+
+// credentialWords are the words a credential usually wears in a variable
+// name. Names are checked, values are not: see docs/command-env.md.
+var credentialWords = []string{
+	"SECRET", "PASSWORD", "PASSWD", "PASSPHRASE", "TOKEN",
+	"CREDENTIAL", "PRIVATE_KEY", "API_KEY", "APIKEY", "ACCESS_KEY",
+}
+
+// credentialWord returns the first credential word a name contains, or "".
+func credentialWord(name string) string {
+	upper := strings.ToUpper(name)
+	for _, w := range credentialWords {
+		if strings.Contains(upper, w) {
+			return w
+		}
+	}
+	return ""
+}
+
+// PlainEnv renders [env] as KEY=value, sorted by name so a child's
+// environment is deterministic.
+func (s *Spec) PlainEnv() []string {
+	if len(s.Env) == 0 {
+		return nil
+	}
+	names := make([]string, 0, len(s.Env))
+	for n := range s.Env {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+
+	out := make([]string, 0, len(names))
+	for _, n := range names {
+		out = append(out, n+"="+s.Env[n])
+	}
+	return out
 }
 
 // OAuthEnv resolves each declared oauth credential to a current access

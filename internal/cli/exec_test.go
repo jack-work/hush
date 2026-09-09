@@ -156,6 +156,52 @@ func TestScriptlessExecIsInjectionProof(t *testing.T) {
 	}
 }
 
+// A command's [env] is a property of the command, so it must beat whatever
+// the caller happened to export, and it must appear exactly once.
+func TestPlainEnvOverridesInheritedValue(t *testing.T) {
+	t.Setenv("AWS_REQUEST_CHECKSUM_CALCULATION", "WHEN_SUPPORTED")
+	spec := &Spec{
+		Delivery: DeliveryScript,
+		Env:      map[string]string{"AWS_REQUEST_CHECKSUM_CALCULATION": "WHEN_REQUIRED"},
+	}
+	cmd, cleanup, err := buildChild(spec, "files", "command.sh",
+		"echo mode=$AWS_REQUEST_CHECKSUM_CALCULATION\n", nil, nil, nil)
+	defer cleanup()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var seen int
+	for _, kv := range cmd.Env {
+		if strings.HasPrefix(kv, "AWS_REQUEST_CHECKSUM_CALCULATION=") {
+			seen++
+		}
+	}
+	if seen != 1 {
+		t.Errorf("the name appears %d times in the child environment, want 1: %v", seen, cmd.Env)
+	}
+	if out := capture(t, cmd, 10*time.Second); !strings.Contains(out, "mode=WHEN_REQUIRED") {
+		t.Errorf("inherited value won over the spec: %q", out)
+	}
+}
+
+// Plain env is orthogonal to delivery: a legacy script command gets it too,
+// alongside secrets that are still rendered into the template.
+func TestPlainEnvReachesLegacyScriptDelivery(t *testing.T) {
+	spec := &Spec{
+		Delivery: DeliveryScript,
+		Env:      map[string]string{"REGION": "spain"},
+	}
+	cmd, cleanup, err := buildChild(spec, "legacy", "command.sh",
+		"echo region=$REGION token={{.token}}\n", map[string]string{"token": "xyz"}, nil, nil)
+	defer cleanup()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out := capture(t, cmd, 10*time.Second); !strings.Contains(out, "region=spain token=xyz") {
+		t.Errorf("output = %q", out)
+	}
+}
+
 func TestChildEnvStripsShimDirFromPath(t *testing.T) {
 	// stripShimDir consults cfg for the shims location; stand up a minimal
 	// one rather than skipping, since this is the anti-recursion guarantee.
@@ -166,7 +212,7 @@ func TestChildEnvStripsShimDirFromPath(t *testing.T) {
 	dir := shimDir()
 	t.Setenv("PATH", dir+":/usr/bin:/bin")
 
-	env := childEnv(nil)
+	env := childEnv(nil, nil)
 	var path string
 	for _, kv := range env {
 		if strings.HasPrefix(kv, "PATH=") {

@@ -44,7 +44,7 @@ func buildChild(spec *Spec, name, scriptName, script string, values map[string]s
 	if spec.Scriptless() {
 		argv := append(append([]string{}, spec.Args...), extra...)
 		cmd := exec.Command(spec.Exec, argv...)
-		cmd.Env = childEnv(secretEnv)
+		cmd.Env = childEnv(spec.PlainEnv(), secretEnv)
 		return cmd, noop, nil
 	}
 
@@ -58,9 +58,9 @@ func buildChild(spec *Spec, name, scriptName, script string, values map[string]s
 		return nil, cleanup, err
 	}
 	if spec.EnvDelivery() {
-		cmd.Env = childEnv(secretEnv)
+		cmd.Env = childEnv(spec.PlainEnv(), secretEnv)
 	} else {
-		cmd.Env = childEnv(nil)
+		cmd.Env = childEnv(spec.PlainEnv(), nil)
 	}
 	return cmd, cleanup, nil
 }
@@ -110,23 +110,42 @@ func anyEnvName(spec *Spec) string {
 }
 
 // childEnv builds the environment handed to a brokered process: the
-// inherited environment with the shims directory removed from PATH, plus
-// the command's declared secrets.
+// inherited environment with the shims directory removed from PATH, then the
+// spec's plain [env], then its credentials. A name the spec sets is deleted
+// from the inherited copy rather than shadowed, so the result says exactly
+// once what the child will see and does not depend on os/exec's dedup rule.
+// Precedence: docs/command-env.md.
 //
 // Stripping the shims directory is what stops a command from re-entering
 // hush. A shim named `curl` early on PATH would otherwise catch the `curl`
 // that the brokered command itself invokes, and hush would call itself
 // until the process table gave out.
-func childEnv(secretEnv []string) []string {
+func childEnv(plainEnv, secretEnv []string) []string {
+	override := make(map[string]bool, len(plainEnv)+len(secretEnv))
+	for _, kv := range append(append([]string{}, plainEnv...), secretEnv...) {
+		if k, _, ok := strings.Cut(kv, "="); ok {
+			override[k] = true
+		}
+	}
+
 	base := os.Environ()
-	out := make([]string, 0, len(base)+len(secretEnv))
+	out := make([]string, 0, len(base)+len(plainEnv)+len(secretEnv))
 	for _, kv := range base {
-		if k, v, ok := strings.Cut(kv, "="); ok && k == "PATH" {
+		k, v, ok := strings.Cut(kv, "=")
+		if !ok {
+			out = append(out, kv)
+			continue
+		}
+		if k == "PATH" {
 			out = append(out, "PATH="+stripShimDir(v))
+			continue
+		}
+		if override[k] {
 			continue
 		}
 		out = append(out, kv)
 	}
+	out = append(out, plainEnv...)
 	return append(out, secretEnv...)
 }
 

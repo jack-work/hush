@@ -81,6 +81,11 @@ func TestSpecValidateRejections(t *testing.T) {
 		{"empty env name", "delivery = \"env\"\n[secrets]\ntoken = \"\"\n", "empty environment"},
 		{"bad env name", "delivery = \"env\"\n[secrets]\ntoken = \"A B\"\n", "not a valid environment"},
 		{"bad duration", "timeout = \"soon\"\n", "not a duration"},
+		{"env name with a dash", "[env]\n\"A-B\" = \"1\"\n", "not a valid environment"},
+		{"env claims PATH", "[env]\nPATH = \"/usr/bin\"\n", "reserved"},
+		{"env claims LD_PRELOAD", "[env]\nLD_PRELOAD = \"/tmp/x.so\"\n", "reserved"},
+		{"env looks like a credential", "[env]\nAWS_SECRET_ACCESS_KEY = \"x\"\n", "[secrets]"},
+		{"env holds an encrypted value", "[env]\nREGION = \"AGE-ENC[abc]\"\n", "secrets.toml"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -102,6 +107,47 @@ func TestSpecValidateRejectsDuplicateEnvNames(t *testing.T) {
 	})
 	if _, err := LoadSpec(dir); err == nil || !strings.Contains(err.Error(), "both map to") {
 		t.Fatalf("expected duplicate-name rejection, got %v", err)
+	}
+}
+
+// Plain [env] must never shadow a credential: the collision is refused at
+// load rather than resolved by precedence, which would be invisible in the
+// child.
+func TestEnvCannotCollideWithACredential(t *testing.T) {
+	for _, c := range []struct{ name, toml string }{
+		{"secrets", "delivery = \"env\"\n[env]\nBRAVE_AUTH = \"plain\"\n[secrets]\na = \"BRAVE_AUTH\"\n"},
+		{"oauth", "delivery = \"env\"\n[env]\nHERALD_AUTH = \"plain\"\n[oauth]\nherald = \"HERALD_AUTH\"\n"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			dir := writeCmdDir(t, "clash", map[string]string{"command.toml": c.toml})
+			_, err := LoadSpec(dir)
+			if err == nil || !strings.Contains(err.Error(), "both map to") {
+				t.Fatalf("expected collision rejection, got %v", err)
+			}
+		})
+	}
+}
+
+// The motivating case: Garage compatibility flags, carried by the command
+// instead of by every user's ~/.aws/config.
+func TestLoadSpecPlainEnv(t *testing.T) {
+	dir := writeCmdDir(t, "files", map[string]string{
+		"command.toml": "exec = \"/usr/bin/aws\"\n\n[env]\n" +
+			"AWS_RESPONSE_CHECKSUM_VALIDATION = \"WHEN_REQUIRED\"\n" +
+			"AWS_REQUEST_CHECKSUM_CALCULATION = \"WHEN_REQUIRED\"\n",
+	})
+	spec, err := LoadSpec(dir)
+	if err != nil {
+		t.Fatalf("LoadSpec: %v", err)
+	}
+	env := spec.PlainEnv()
+	// Sorted by name, so a child environment is deterministic.
+	want := []string{
+		"AWS_REQUEST_CHECKSUM_CALCULATION=WHEN_REQUIRED",
+		"AWS_RESPONSE_CHECKSUM_VALIDATION=WHEN_REQUIRED",
+	}
+	if len(env) != len(want) || env[0] != want[0] || env[1] != want[1] {
+		t.Errorf("PlainEnv() = %v, want %v", env, want)
 	}
 }
 

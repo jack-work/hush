@@ -199,13 +199,18 @@ type OAuthRegisterRequest struct {
 // refresh_token, which is what every credential written before grants
 // existed already is.
 const (
-	GrantRefreshToken = oauth.GrantRefreshToken
-	GrantCopilot      = oauth.GrantCopilot
+	GrantRefreshToken      = oauth.GrantRefreshToken
+	GrantCopilot           = oauth.GrantCopilot
+	GrantClientCredentials = oauth.GrantClientCredentials
 )
 
 // MetaAPIBase is the metadata key an exchange grant uses to name the API
 // host its token must be spent at.
 const MetaAPIBase = oauth.CopilotAPIBaseKey
+
+// MetaScope is the metadata key carrying the scope an authorization server
+// granted, which may be narrower than the scope requested.
+const MetaScope = oauth.ScopeKey
 
 // OAuthRegister installs (or replaces) an OAuth credential. The agent
 // persists the encrypted tokens, kicks off proactive refresh, and exposes

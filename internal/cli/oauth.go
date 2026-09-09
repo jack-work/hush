@@ -14,6 +14,7 @@ import (
 
 	"github.com/jack-work/hush/client"
 	"github.com/jack-work/hush/internal/agent"
+	"github.com/jack-work/hush/internal/oauth"
 )
 
 func init() {
@@ -43,6 +44,7 @@ var (
 	oauthRegFlagScopes       string
 	oauthRegFlagExpiresIn    int
 	oauthRegFlagGrant        string
+	oauthRegFlagClientSecret string
 )
 
 func init() {
@@ -53,7 +55,10 @@ func init() {
 	f.StringVar(&oauthRegFlagClientID, "client-id", "", "OAuth client ID (required)")
 	f.StringVar(&oauthRegFlagScopes, "scopes", "", "OAuth scopes (space-separated)")
 	f.IntVar(&oauthRegFlagExpiresIn, "expires-in", 0, "seconds until access token expires")
-	f.StringVar(&oauthRegFlagGrant, "grant", "", "minting strategy: refresh_token (default) or copilot")
+	f.StringVar(&oauthRegFlagGrant, "grant", "",
+		"minting strategy: "+strings.Join(oauth.GrantNames(), ", ")+" (default refresh_token)")
+	f.StringVar(&oauthRegFlagClientSecret, "client-secret", "",
+		"client secret, for grants that mint from one (prompted if omitted)")
 }
 
 var oauthRegisterCmd = &cobra.Command{
@@ -78,10 +83,13 @@ func runOAuthRegister(cmd *cobra.Command, args []string) error {
 	grant := oauthRegFlagGrant
 
 	// An EXCHANGE grant derives its access token from a durable secret, so
-	// registration needs only that secret and the endpoint: no client id,
-	// no access token, no expiry. The agent mints the first session itself,
-	// which also proves the credential works while someone is watching.
-	if grant == "copilot" {
+	// registration needs only that secret and the endpoint: no access
+	// token, no expiry. The agent mints the first session itself, which
+	// also proves the credential works while someone is watching.
+	//
+	// Asked of the grant rather than matched by name, so a grant added
+	// later needs no edit here.
+	if oauth.MintsOnRegister(grant) && grant != "" {
 		return registerExchange(c, name, grant)
 	}
 
@@ -145,20 +153,37 @@ func runOAuthRegister(cmd *cobra.Command, args []string) error {
 }
 
 // registerExchange handles the grants whose durable secret is the whole
-// registration.
+// registration: the agent mints the first access token from it immediately.
+//
+// client_id and scopes are optional and grant-dependent. Copilot needs
+// neither. client_credentials may need both, or neither: some providers
+// embed the client id in the secret (Tailscale's tskey-client-<id>-<secret>)
+// and accept the secret alone. Whatever is supplied is passed through; the
+// grant's Validate has the final say.
 func registerExchange(c *client.Client, name, grant string) error {
 	reader := bufio.NewReader(os.Stdin)
 	tokURL := oauthRegFlagTokenURL
 	if tokURL == "" {
 		tokURL = promptLine(reader, "token_url (the exchange endpoint): ")
 	}
-	secret, err := promptSecret("durable secret (e.g. GitHub access token): ")
-	if err != nil {
-		return err
+
+	prompt := "durable secret (e.g. GitHub access token): "
+	if grant == client.GrantClientCredentials {
+		prompt = "client_secret: "
 	}
+	secret := oauthRegFlagClientSecret
+	if secret == "" {
+		var err error
+		if secret, err = promptSecret(prompt); err != nil {
+			return err
+		}
+	}
+
 	if err := c.OAuthRegister(client.OAuthRegisterRequest{
 		Name:         name,
 		TokenURL:     tokURL,
+		ClientID:     oauthRegFlagClientID,
+		Scopes:       oauthRegFlagScopes,
 		Grant:        grant,
 		RefreshToken: secret,
 	}); err != nil {

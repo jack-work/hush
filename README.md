@@ -98,7 +98,7 @@ services.hush-agent.enable = true;
 ttl = "168h"
 
 [unlock]
-method = "keyring"          # or "passphrase" (TTY), "exec", "auto"
+method = "keyring"          # or "passphrase" (TTY), "exec", "file", "auto"
 
 [unlock.keyring]
 service = "hush"
@@ -107,11 +107,15 @@ account = "default"
 # method = "exec" runs any password manager and reads stdout:
 # exec = ["pass", "show", "hush/passphrase"]
 # exec = ["op", "read", "op://Personal/Hush/passphrase"]
+
+# method = "file" reads the passphrase from a file only you can read
+# (mode 0600 or tighter, or I refuse it):
+# file = "/home/you/.config/hush/passphrase"
 ```
 
 priority: flags, then env (`HUSH_TTL`, `HUSH_IDENTITY`, `HUSH_CONFIG_DIR` / `HUSH_STATE_DIR` / `HUSH_RUNTIME_DIR`), then config, then XDG defaults. your word is final. the `HUSH_*` directory overrides let dev shells and embedded callers pin every singleton without colliding with your real one.
 
-seed the keyring once (`hush keyring set`, double-prompts, never prints it) and with a long ttl you type your passphrase once a session. headless box with no Secret Service? `method = "exec"` needs no dbus. `hush status` always names the method in play.
+seed the keyring once (`hush keyring set`, double-prompts, never prints it) and with a long ttl you type your passphrase once a session. headless box with no Secret Service? `method = "exec"` needs no dbus, and `method = "file"` needs no helper either: the passphrase sits in a file I refuse to read unless it is 0600. `hush status` always names the method in play.
 
 ## embedding me
 

@@ -35,6 +35,8 @@ type UnlockConfig struct {
 	//                            Manager) under Service/Account.
 	//   "exec"                 — run an external command and read the
 	//                            passphrase from its stdout.
+	//   "file"                 : read the passphrase out of a file that
+	//                            only the owner can read.
 	Method string
 
 	// Keyring is consulted when Method == "keyring".
@@ -43,6 +45,11 @@ type UnlockConfig struct {
 	// Exec is the argv consulted when Method == "exec". The command's
 	// stdout is read; a single trailing newline is stripped.
 	Exec []string
+
+	// File is the path consulted when Method == "file". The file must
+	// not be readable by group or other; a single trailing newline is
+	// stripped from its contents.
+	File string
 }
 
 // KeyringConfig identifies the OS-keyring entry holding the hush
@@ -163,6 +170,7 @@ type fileConfig struct {
 	Unlock   struct {
 		Method  string   `toml:"method"`
 		Exec    []string `toml:"exec"`
+		File    string   `toml:"file"`
 		Keyring struct {
 			Service string `toml:"service"`
 			Account string `toml:"account"`
@@ -225,6 +233,7 @@ func loadFromDirs(cfgDir, sDir, rDir string) (*Config, error) {
 			Method:  f.Unlock.Method,
 			Keyring: KeyringConfig(f.Unlock.Keyring),
 			Exec:    f.Unlock.Exec,
+			File:    f.Unlock.File,
 		},
 	}, nil
 }

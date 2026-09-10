@@ -9,8 +9,8 @@
 // for free.
 //
 // Today's backends are local-friendly: a TTY prompt (the default), the
-// OS keyring (via the keyring sibling package), and a generic external
-// command. Future work may add cluster-friendly methods (kubernetes
+// OS keyring (via the keyring sibling package), a generic external
+// command, and a mode-0600 file. Future work may add cluster-friendly methods (kubernetes
 // service-account JWT, OIDC, AWS IAM) without touching the Unlocker
 // interface or the call sites.
 package unlock
@@ -90,8 +90,10 @@ func New(cfg config.UnlockConfig, hooks Hooks) (Unlocker, error) {
 		}, nil
 	case "exec":
 		return &execUnlocker{argv: cfg.Exec}, nil
+	case "file":
+		return &fileUnlocker{path: cfg.File}, nil
 	default:
-		return nil, fmt.Errorf("unknown unlock method %q (valid: auto, passphrase, keyring, exec)", cfg.Method)
+		return nil, fmt.Errorf("unknown unlock method %q (valid: auto, passphrase, keyring, exec, file)", cfg.Method)
 	}
 }
 

@@ -156,6 +156,11 @@ func describeUnlock(u config.UnlockConfig) string {
 			return "exec (argv not set — misconfigured)"
 		}
 		return fmt.Sprintf("exec %v", u.Exec)
+	case "file":
+		if u.File == "" {
+			return "file (path not set: misconfigured)"
+		}
+		return fmt.Sprintf("file %s", u.File)
 	default:
 		return fmt.Sprintf("%s (unknown method)", method)
 	}

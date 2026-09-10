@@ -132,3 +132,23 @@ func TestLoadsAreIndependent(t *testing.T) {
 		t.Errorf("identity = %s, want %s — the first load's default leaked", cfg.IdentityFile, want)
 	}
 }
+
+// TestLoadFileUnlockMethod pins the "file" method's key, which is a
+// bare string rather than exec's argv array.
+func TestLoadFileUnlockMethod(t *testing.T) {
+	dir := write(t, t.TempDir(), `
+[unlock]
+method = "file"
+file = "/home/someone/.config/hush/passphrase"
+`)
+	cfg, err := loadFromDirs(dir, dir, dir)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if cfg.Unlock.Method != "file" {
+		t.Errorf("method = %q", cfg.Unlock.Method)
+	}
+	if want := "/home/someone/.config/hush/passphrase"; cfg.Unlock.File != want {
+		t.Errorf("file = %q, want %q", cfg.Unlock.File, want)
+	}
+}

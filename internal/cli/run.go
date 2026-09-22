@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"text/template"
 	"time"
 
@@ -144,6 +145,9 @@ func ensureAgent(sockPath string) error {
 
 	id, err := promptAndUnlock(cfg.IdentityFile)
 	if err != nil {
+		if hint := unlockHint(err); hint != "" {
+			return fmt.Errorf("%w\n\n%s", err, hint)
+		}
 		if !interactive {
 			return fmt.Errorf("hush agent is not running and could not start it non-interactively: %w\n\n"+
 				"Seed the passphrase into your OS keyring so autostart is silent:\n\n  hush keyring set\n\n"+
@@ -182,4 +186,28 @@ func spawnDaemonWithID(id *identity.DecryptedIdentity, ttl time.Duration) error 
 	fmt.Fprintf(os.Stderr, "Agent started (pid %d, ttl %s)\n", pid, ttl)
 	daemon.CleanAgentLogs(time.Hour)
 	return nil
+}
+
+// unlockHint answers the one failure whose stock advice was actively
+// misleading: a passphrase that does not match the identity. The old text
+// offered `hush keyring set`, which seeds the keyring with the same wrong
+// passphrase and fails identically, and it never named the source the
+// passphrase actually came from. Empty means "no special guidance".
+func unlockHint(err error) string {
+	if !strings.Contains(err.Error(), "incorrect passphrase") {
+		return ""
+	}
+	var source string
+	switch cfg.Unlock.Method {
+	case "file":
+		source = fmt.Sprintf("The passphrase came from %s. Rewrite it (mode 0600) with\nthe one you gave `hush init`.", cfg.Unlock.File)
+	case "keyring":
+		source = fmt.Sprintf("The passphrase came from the OS keyring (service %q, account %q).\nReseed it with `hush keyring set`.",
+			cfg.Unlock.Keyring.Service, cfg.Unlock.Keyring.Account)
+	case "exec":
+		source = fmt.Sprintf("The passphrase came from %s.", strings.Join(cfg.Unlock.Exec, " "))
+	default:
+		source = "The passphrase you typed does not match this identity."
+	}
+	return source + "\n\nIf it is lost for good, start over with `hush reset`: it deletes the\nidentity AND every secret sealed to it, which cannot be undone."
 }

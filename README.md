@@ -40,6 +40,7 @@ when you run `hush brave "query"`, I decrypt, template into your shell command, 
 | | |
 |---|---|
 | `hush init` | generate your identity |
+| `hush reset` | passphrase lost: delete the identity AND everything sealed to it, then init again |
 | `hush up [-d] [--ttl 1h]` / `hush down` | start the agent / zero the key, lights out |
 | `hush <name> [args...]` | decrypt, template, execute, forget |
 | `hush secret new <name>` | scaffold a command and its first secret |

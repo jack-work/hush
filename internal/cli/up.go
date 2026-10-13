@@ -39,6 +39,46 @@ var upCmd = &cobra.Command{
 }
 
 func runUp(cmd *cobra.Command, args []string) error {
+	// Capture this before anything can consume the claim: the agent
+	// clears LISTEN_PID once it adopts the descriptor, so asking later
+	// gives the wrong answer.
+	activated := agent.SocketActivated()
+	started := time.Now()
+
+	err := runUpBody(cmd, args, activated)
+
+	// An activated start that fails must not fail INSTANTLY. systemd
+	// re-triggers on the connection still pending in the socket's
+	// backlog, so a process that dies in microseconds becomes an
+	// activation storm, and a storm trips one of two rate limits —
+	// TriggerLimitBurst on the socket, StartLimitBurst on the service.
+	// Either one stops the socket unit, and on-demand starting is then
+	// dead until a human re-arms it by hand. Silence, from a fault that
+	// would have cleared on its own.
+	//
+	// A floor on how fast we may fail caps the activation rate at well
+	// under one per second, whatever the cause — a held lock, a locked
+	// keyring, a bad passphrase. The client waiting on the other end has
+	// its own deadline and is unaffected by a pause we take on the way
+	// out.
+	if err != nil && activated {
+		if remaining := activationFailureFloor - time.Since(started); remaining > 0 {
+			time.Sleep(remaining)
+		}
+	}
+	return err
+}
+
+// activationFailureFloor is the minimum lifetime of a failing activated
+// agent. See runUp.
+const activationFailureFloor = 2 * time.Second
+
+// lockWaitOnActivation is how long an activated agent waits for a
+// predecessor to release the single-instance lock before giving up. See
+// runUpBody.
+const lockWaitOnActivation = 60 * time.Second
+
+func runUpBody(cmd *cobra.Command, args []string, activated bool) error {
 	ttl := cfg.TTL
 	if flagTTL != "" {
 		d, err := time.ParseDuration(flagTTL)
@@ -76,6 +116,33 @@ func runUp(cmd *cobra.Command, args []string) error {
 		}
 	}
 
+	// Another agent may already hold the single-instance lock. Run()
+	// would discover that too, but only after promptAndUnlock has run
+	// scrypt over the identity — ~840ms and a ~520MB peak to learn
+	// something knowable in microseconds.
+	//
+	// What to do about it depends on who asked.
+	//
+	// Activated: a client is queued in our socket's backlog and systemd
+	// has made us responsible for it. Wait. A predecessor holding the
+	// lock is almost always one whose TTL is about to lapse, and while
+	// we wait the service counts as running, so systemd does not
+	// re-trigger — the activation rate stays at one per client instead
+	// of hundreds per second. If it frees in time we go on to serve the
+	// very connection that started us.
+	//
+	// Interactive: answer now. Nobody typing `hush up` wants a minute of
+	// silence, and the message names the holder.
+	pidPath := filepath.Join(cfg.RuntimeDir, "agent.pid")
+	if activated {
+		if err := waitForLockFree(pidPath, lockWaitOnActivation); err != nil {
+			return err
+		}
+	} else if free, ferr := singleton.Free(pidPath); ferr == nil && !free {
+		return fmt.Errorf("another agent is already running (%s holds %s)",
+			lockHolder(pidPath), pidPath)
+	}
+
 	// Prompt for passphrase and decrypt identity.
 	id, err := promptAndUnlock(cfg.IdentityFile)
 	if err != nil {
@@ -95,6 +162,42 @@ func runUp(cmd *cobra.Command, args []string) error {
 
 	ag := agent.New(id, ttl, cfg.RuntimeDir, cfg.StateDir, logger)
 	return ag.Run()
+}
+
+// waitForLockFree blocks until no agent holds the single-instance lock,
+// or the timeout expires. Used only on the activated path, where holding
+// systemd's service slot is precisely what keeps activation from being
+// re-triggered into a storm.
+func waitForLockFree(pidPath string, timeout time.Duration) error {
+	if free, err := singleton.Free(pidPath); err != nil || free {
+		return nil
+	}
+
+	// Say so once, on stderr, which journald captures for the unit. A
+	// silent minute is indistinguishable from a hang.
+	fmt.Fprintf(os.Stderr,
+		"another agent (%s) still holds %s; waiting up to %s for it to exit\n",
+		lockHolder(pidPath), pidPath, timeout)
+
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		time.Sleep(250 * time.Millisecond)
+		if free, err := singleton.Free(pidPath); err != nil || free {
+			fmt.Fprintln(os.Stderr, "predecessor exited; taking over")
+			return nil
+		}
+	}
+	return fmt.Errorf(
+		"another agent (%s) has held %s for %s; it is not socket-activated, "+
+			"so this one cannot take over. Stop it and let the socket unit start the next: hush down",
+		lockHolder(pidPath), pidPath, timeout)
+}
+
+func lockHolder(pidPath string) string {
+	if h, err := singleton.Holder(pidPath); err == nil {
+		return fmt.Sprintf("pid %d", h)
+	}
+	return "unknown pid"
 }
 
 func promptAndUnlock(identityFile string) (*identity.DecryptedIdentity, error) {

@@ -169,8 +169,23 @@ func (a *Agent) bindSocket() (net.Listener, error) {
 	if err != nil {
 		return nil, fmt.Errorf("listen: %w", err)
 	}
+
+	// Take the unlink decision away from net. A UnixListener created by
+	// net.Listen removes its path on Close, using the path it bound —
+	// with no regard for whether that path still holds OUR node. If a
+	// socket unit armed while we ran, it unlinked ours and bound its
+	// own there, and our Close would delete the unit's node on the way
+	// out: activation still green, every client ENOENT, forever.
+	//
+	// shutdown() unlinks instead, and only after checking that what sits
+	// at the path is not somebody else's live listener.
+	if ul, ok := ln.(*net.UnixListener); ok {
+		ul.SetUnlinkOnClose(false)
+	}
+
 	if err := os.Chmod(sockPath, 0600); err != nil {
 		ln.Close()
+		os.Remove(sockPath)
 		return nil, fmt.Errorf("chmod socket: %w", err)
 	}
 	a.bound = true
@@ -403,8 +418,26 @@ func (a *Agent) shutdown() {
 		// it re-arms on the same inode after we exit, so unlinking it
 		// would break every future activation. The same restraint
 		// applies to a startup that never got as far as binding.
+		//
+		// And a node we DID bind may no longer be the node at that path:
+		// a socket unit that armed while we ran unlinked ours and bound
+		// its own. Removing that one hands systemd a socket no client
+		// can ever reach — activation alive, every connection ENOENT,
+		// and nothing in any log to say why.
+		//
+		// Identity comparison (os.SameFile) looks like the answer and is
+		// not: the kernel hands the replacement the inode number it just
+		// freed, so the new node compares equal to the old one. Ask a
+		// question inode reuse cannot forge — is anyone LISTENING there?
+		// Our own listener is closed by the time shutdown runs, so a
+		// listening node at our path belongs to somebody else.
 		if a.bound {
-			os.Remove(a.sockPath())
+			if socketIsListening(a.sockPath()) {
+				a.log.Printf("socket at %s is now held by another listener (a socket unit armed while we ran); leaving it alone",
+					a.sockPath())
+			} else {
+				os.Remove(a.sockPath())
+			}
 		}
 		// Release the lock last; the PID file itself stays in place,
 		// it is the lock inode (see acquireLock).

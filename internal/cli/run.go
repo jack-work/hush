@@ -1,13 +1,10 @@
 package cli
 
 import (
-	"bytes"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strings"
-	"text/template"
 	"time"
 
 	"github.com/BurntSushi/toml"
@@ -18,6 +15,7 @@ import (
 	"github.com/jack-work/hush/internal/daemon"
 	"github.com/jack-work/hush/internal/identity"
 	"github.com/jack-work/hush/internal/singleton"
+	"strings"
 )
 
 func runCmd(cmd *cobra.Command, args []string) error {
@@ -34,16 +32,23 @@ func runCmd(cmd *cobra.Command, args []string) error {
 	}
 
 	// Locate the command script, trying each platform candidate in order.
+	spec, err := LoadSpec(cmdDir)
+	if err != nil {
+		return err
+	}
+
 	var scriptName string
 	var cmdBytes []byte
-	for _, name := range commandScriptNames() {
-		p := filepath.Join(cmdDir, name)
-		if b, err := os.ReadFile(p); err == nil {
-			scriptName, cmdBytes = name, b
-			break
+	if !spec.Scriptless() {
+		for _, name := range commandScriptNames() {
+			p := filepath.Join(cmdDir, name)
+			if b, err := os.ReadFile(p); err == nil {
+				scriptName, cmdBytes = name, b
+				break
+			}
 		}
 	}
-	if cmdBytes == nil {
+	if cmdBytes == nil && !spec.Scriptless() {
 		// Check if this is a config-only command (secrets.toml but no script).
 		secretsFile := filepath.Join(cmdDir, "secrets.toml")
 		if _, secErr := os.Stat(secretsFile); secErr == nil {
@@ -67,31 +72,31 @@ func runCmd(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	// Build template context: secrets at top level + Args + Cmd.
-	ctx := make(map[string]interface{}, len(values)+2)
-	for k, v := range values {
-		ctx[k] = v
+	// OAuth credentials are resolved lazily, so a command that declares
+	// none never wakes the agent for them.
+	oauthResolver := func(credential string) (string, error) {
+		sockPath := filepath.Join(cfg.RuntimeDir, "agent.sock")
+		// Start the agent if it is not up, exactly as the secrets path does.
+		// Without this, any command whose credentials are entirely OAuth
+		// fails the moment the agent's TTL lapses — which for a long-running
+		// unit means dying on a timer.
+		if err := ensureAgent(sockPath); err != nil {
+			return "", err
+		}
+		return client.NewWithSocket(sockPath).OAuthGet(credential)
 	}
-	ctx["Args"] = extra
-	ctx["Cmd"] = name
 
-	// Render template.
-	tmpl, err := template.New(scriptName).Parse(string(cmdBytes))
+	child, cleanup, err := buildChild(spec, name, scriptName, string(cmdBytes), values, extra, oauthResolver)
+	defer cleanup()
 	if err != nil {
-		return fmt.Errorf("parse template: %w", err)
-	}
-	var rendered bytes.Buffer
-	if err := tmpl.Execute(&rendered, ctx); err != nil {
-		return fmt.Errorf("render template: %w", err)
+		return err
 	}
 
-	// Execute via the platform shell for this script type.
-	sh := shellCommand(rendered.String(), scriptName, "hush-"+name, extra)
-	sh.Stdin = os.Stdin
-	sh.Stdout = os.Stdout
-	sh.Stderr = os.Stderr
+	child.Stdin = os.Stdin
+	child.Stdout = os.Stdout
+	child.Stderr = os.Stderr
 
-	if err := sh.Run(); err != nil {
+	if err := runBrokered(child, spec.Timeout.Duration); err != nil {
 		if exitErr, ok := err.(*exec.ExitError); ok {
 			os.Exit(exitErr.ExitCode())
 		}

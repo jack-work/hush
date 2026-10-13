@@ -4,6 +4,30 @@ Documentation=https://github.com/jack-work/hush
 Requires=hush-agent.socket
 After=hush-agent.socket
 
+# No start rate limit, because hitting one here is a ONE-WAY DOOR: when an
+# activated service exceeds the limit, systemd stops the socket unit that
+# triggers it. Activation is then dead until a human re-arms it by hand, and
+# nothing says so — every consumer just reports "agent is not running"
+# forever.
+#
+# The way in is a transient race. If some process self-bound the agent socket
+# before this unit armed, systemd unlinks and rebinds that path on start; the
+# self-bound agent survives on an orphaned inode still holding the lock, and
+# the activated agent cannot take it. Every activation fails until that agent
+# exits. With a limit, "until that agent exits" becomes "forever". Without
+# one, the collision resolves itself the moment its TTL lapses — minutes, not
+# a debugging session.
+#
+# Spinning is not the alternative risk it looks like: starts here are driven
+# by clients connecting, not by systemd retrying, and a collision is refused
+# before the identity is unlocked (see runUp), so a failed activation costs
+# microseconds rather than a half-gigabyte scrypt run.
+#
+# This belongs in [Unit], not [Service]. It moved in systemd 229, and the
+# older placement is silently ignored — a setting that looks present and does
+# nothing is worse than one that is absent.
+StartLimitIntervalSec=0
+
 [Service]
 Type=exec
 ExecStart={{EXEC}} up

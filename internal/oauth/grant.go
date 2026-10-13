@@ -88,3 +88,15 @@ func httpStatusClass(status int) error {
 	}
 	return nil
 }
+
+// MintsOnRegister reports whether a named grant can mint its first access
+// token from the durable secret alone, so registration need not collect an
+// access token and an expiry. Unknown grants report false: the caller then
+// walks the fuller registration and gets a precise error from Validate.
+func MintsOnRegister(name string) bool {
+	if name == "" {
+		name = GrantRefreshToken
+	}
+	g, ok := grants[name]
+	return ok && g.MintsOnRegister()
+}

@@ -35,6 +35,8 @@ when you run `hush brave "query"`, I decrypt, template into your shell command, 
 
 **OAuth tokens** are mine to keep current. log in once with `hush oauth login`, I renew the access token partway through its life and hand the live one over the socket to whoever asks.
 
+**plain environment** a command needs in order to work at all goes in its spec's `[env]` table, so compatibility knowledge travels with the command instead of being redeployed on every box. precedence and refusals: [docs/command-env.md](docs/command-env.md).
+
 ## commands
 
 | | |
@@ -89,6 +91,7 @@ services.hush-agent.enable = true;
 ~/.config/hush/identity.age(.pub)          your key, passphrase-wrapped
 ~/.config/hush/hush.toml                   ttl, unlock method
 ~/.config/hush/commands/<name>/command.sh  template: {{.token}}, {{.Args}}
+                        …/command.toml     shape: exec, args, env, secrets, oauth
                         …/secrets.toml     key = "AGE-ENC[…]"
 ~/.local/state/hush/oauth/<name>.toml      tokens, encrypted at rest
 ```

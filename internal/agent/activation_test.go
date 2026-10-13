@@ -245,3 +245,42 @@ func tempRuntimeDir(t *testing.T) string {
 	t.Cleanup(func() { os.RemoveAll(dir) })
 	return dir
 }
+
+// TestSelfBoundAgentDoesNotDeleteAReplacementNode covers the mirror of
+// TestRunAdoptsInheritedSocket, and a failure that leaves no trace: an
+// agent binds its own socket, a systemd .socket unit then arms on the
+// same path (unlinking ours and binding its own), and our agent later
+// exits. If shutdown removes "the socket at our path" it deletes the
+// unit's node — activation stays green while every client gets ENOENT
+// forever.
+func TestSelfBoundAgentDoesNotDeleteAReplacementNode(t *testing.T) {
+	rt, st := tempRuntimeDir(t), t.TempDir()
+
+	a := newTestAgent(t, rt, st)
+	done := make(chan error, 1)
+	go func() { done <- a.Run() }()
+	waitForReply(t, a.sockPath())
+
+	if !a.bound {
+		t.Fatal("agent should have bound its own socket")
+	}
+
+	// A socket unit arming: unlink what is there, bind a fresh node at
+	// the same path. Exactly what systemd does on start.
+	if err := os.Remove(a.sockPath()); err != nil {
+		t.Fatalf("simulate unit unlinking our node: %v", err)
+	}
+	replacement := listeningFd(t, a.sockPath())
+
+	a.listener.Close()
+	if err := <-done; err != nil {
+		t.Fatalf("agent exit: %v", err)
+	}
+	if _, err := os.Stat(a.sockPath()); err != nil {
+		t.Fatalf("agent deleted the replacement node on shutdown: %v", err)
+	}
+	if !socketIsListening(a.sockPath()) {
+		t.Fatal("replacement node survived but is no longer listening")
+	}
+	_ = replacement
+}

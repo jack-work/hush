@@ -187,8 +187,6 @@ type OAuthRegisterRequest struct {
 	AccessToken  string
 	RefreshToken string
 	ExpiresIn    int
-	// Grant selects the minting strategy: "" or "refresh_token" for the
-	// OAuth refresh grant, "copilot" for the GitHub Copilot exchange.
 	// Grants that mint on register (exchanges) need only RefreshToken —
 	// the durable secret — and TokenURL.
 	Grant string
@@ -201,6 +199,7 @@ type OAuthRegisterRequest struct {
 const (
 	GrantRefreshToken = oauth.GrantRefreshToken
 	GrantCopilot      = oauth.GrantCopilot
+	GrantEntra        = oauth.GrantEntra
 )
 
 // MetaAPIBase is the metadata key an exchange grant uses to name the API

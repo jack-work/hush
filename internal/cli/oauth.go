@@ -51,7 +51,7 @@ func init() {
 	f.StringVar(&oauthRegFlagClientID, "client-id", "", "OAuth client ID (required)")
 	f.StringVar(&oauthRegFlagScopes, "scopes", "", "OAuth scopes (space-separated)")
 	f.IntVar(&oauthRegFlagExpiresIn, "expires-in", 0, "seconds until access token expires")
-	f.StringVar(&oauthRegFlagGrant, "grant", "", "minting strategy: refresh_token (default) or copilot")
+	f.StringVar(&oauthRegFlagGrant, "grant", "", "minting strategy: refresh_token (default), copilot or entra")
 }
 
 var oauthRegisterCmd = &cobra.Command{

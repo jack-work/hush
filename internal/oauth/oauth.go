@@ -160,9 +160,11 @@ type configState struct {
 	cfg    Config
 	tokens atomic.Pointer[plaintextTokens]
 
-	// mu serializes refresh attempts for this config and protects flight.
-	mu     sync.Mutex
-	flight *refreshOp
+	mu         sync.Mutex
+	flight     *refreshOp
+	backoff    time.Duration
+	retryAfter time.Time
+	lastErr    error
 
 	// cancel stops the proactive refresh goroutine.
 	cancel context.CancelFunc
@@ -191,6 +193,9 @@ type Manager struct {
 
 	// httpClient is overridable for tests.
 	httpClient httpDoer
+
+	now    func() time.Time
+	jitter func(time.Duration) time.Duration
 }
 
 // NewManager builds a manager rooted at stateDir. Call Start to load
@@ -206,6 +211,8 @@ func NewManager(stateDir string, identities []age.Identity, recipient age.Recipi
 		ctx:        ctx,
 		cancel:     cancel,
 		httpClient: defaultHTTPClient(),
+		now:        time.Now,
+		jitter:     equalJitter,
 	}
 }
 
@@ -406,7 +413,6 @@ func (m *Manager) lookup(name string) *configState {
 // proactiveLoop refreshes a token partway through its lifetime. Backs off on
 // transient failures; exits permanently on hard failures.
 func (m *Manager) proactiveLoop(ctx context.Context, st *configState) {
-	backoff := time.Second
 	for {
 		p := st.tokens.Load()
 		if p == nil || p.relogin != "" {
@@ -422,24 +428,18 @@ func (m *Manager) proactiveLoop(ctx context.Context, st *configState) {
 
 		_, err := m.doRefresh(st)
 		if err == nil {
-			backoff = time.Second
 			continue
 		}
 		if errors.Is(err, ErrRefreshPermanent) {
 			m.logger.Printf("oauth: %s refresh failed permanently, proactive loop stopping", st.cfg.Name)
 			return
 		}
-		m.logger.Printf("oauth: %s transient refresh failure, retrying in %s: %v", st.cfg.Name, backoff, err)
+		retry := m.retryWait(st)
+		m.logger.Printf("oauth: %s transient refresh failure, retrying in %s: %v", st.cfg.Name, retry.Round(time.Second), err)
 		select {
 		case <-ctx.Done():
 			return
-		case <-time.After(backoff):
-		}
-		if backoff < 5*time.Minute {
-			backoff *= 4
-			if backoff > 5*time.Minute {
-				backoff = 5 * time.Minute
-			}
+		case <-time.After(retry):
 		}
 	}
 }

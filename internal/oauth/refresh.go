@@ -3,6 +3,7 @@ package oauth
 import (
 	"errors"
 	"fmt"
+	"math/rand/v2"
 	"net/http"
 	"strings"
 	"time"
@@ -27,6 +28,11 @@ func (m *Manager) doRefresh(st *configState) (string, error) {
 		st.mu.Unlock()
 		<-existing.done
 		return existing.result, existing.err
+	}
+	if wait := st.retryAfter.Sub(m.now()); wait > 0 {
+		err := fmt.Errorf("%w (next attempt in %s)", st.lastErr, wait.Round(time.Second))
+		st.mu.Unlock()
+		return "", err
 	}
 	op := &refreshOp{done: make(chan struct{})}
 	st.flight = op
@@ -97,7 +103,38 @@ func (m *Manager) finish(op *refreshOp, st *configState, result string, err erro
 	op.err = err
 	close(op.done)
 	st.flight = nil
+	switch {
+	case err != nil && !errors.Is(err, ErrRefreshPermanent):
+		st.backoff = nextRefreshBackoff(st.backoff)
+		st.retryAfter = m.now().Add(m.jitter(st.backoff))
+		st.lastErr = err
+	case err == nil:
+		st.backoff, st.retryAfter, st.lastErr = 0, time.Time{}, nil
+	}
 	st.mu.Unlock()
+}
+
+const (
+	refreshBackoffBase = time.Second
+	refreshBackoffMax  = 5 * time.Minute
+)
+
+func nextRefreshBackoff(cur time.Duration) time.Duration {
+	if cur <= 0 {
+		return refreshBackoffBase
+	}
+	return min(cur*4, refreshBackoffMax)
+}
+
+func equalJitter(d time.Duration) time.Duration {
+	half := d / 2
+	return half + rand.N(d-half+1)
+}
+
+func (m *Manager) retryWait(st *configState) time.Duration {
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	return max(st.retryAfter.Sub(m.now()), 0)
 }
 
 // mint asks the config's grant for a fresh access token. The manager knows

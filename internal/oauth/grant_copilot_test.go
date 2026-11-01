@@ -171,6 +171,8 @@ func TestCopilotStatusClassification(t *testing.T) {
 func TestCopilotUnicornPageIsTransient(t *testing.T) {
 	srv := newCopilotServer(t)
 	m := newGrantManager(t)
+	clock := time.Unix(1_000_000, 0)
+	m.now = func() time.Time { return clock }
 	if err := m.Register(copilotConfig(srv.URL), Tokens{RefreshToken: "gho_durable"}); err != nil {
 		t.Fatal(err)
 	}
@@ -185,8 +187,10 @@ func TestCopilotUnicornPageIsTransient(t *testing.T) {
 		t.Fatalf("an HTML body was pasted whole into the error:\n%s", err)
 	}
 
-	// And the credential recovers by itself once GitHub calms down.
+	// And the credential recovers by itself once GitHub calms down and the
+	// backoff has run out.
 	srv.status, srv.body = 200, ""
+	clock = clock.Add(refreshBackoffBase)
 	tok, err := m.Refresh("copilot")
 	if err != nil {
 		t.Fatalf("recovery: %v", err)

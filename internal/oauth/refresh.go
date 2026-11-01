@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 )
 
@@ -32,6 +33,18 @@ func (m *Manager) doRefresh(st *configState) (string, error) {
 	st.mu.Unlock()
 
 	cur := st.tokens.Load()
+	if cur != nil && cur.relogin != "" {
+		if disk, ok := m.newerOnDisk(st); ok && disk.relogin == "" {
+			m.logger.Printf("oauth: %s has a new login on disk; adopting it", st.cfg.Name)
+			st.tokens.Store(&disk)
+			m.finish(op, st, disk.access, nil)
+			return disk.access, nil
+		}
+		err := reloginError(st.cfg, cur.relogin)
+		m.finish(op, st, "", err)
+		return "", err
+	}
+
 	tok, err := m.mint(st, currentRefresh(cur))
 	if errors.Is(err, ErrRefreshPermanent) {
 		// A permanent rejection usually means our refresh token was
@@ -51,6 +64,9 @@ func (m *Manager) doRefresh(st *configState) (string, error) {
 			if prevTok, prevErr := m.mint(st, prev); prevErr == nil {
 				tok, err = prevTok, nil
 			}
+		}
+		if errors.Is(err, ErrRefreshPermanent) {
+			err = m.latchRelogin(st, cur, err)
 		}
 	}
 
@@ -92,6 +108,37 @@ func (m *Manager) mint(st *configState, durable string) (Tokens, error) {
 		return Tokens{}, err
 	}
 	return g.Mint(m.ctx, m.httpClient, st.cfg, durable)
+}
+
+const reloginReasonMax = 300
+
+func (m *Manager) latchRelogin(st *configState, cur *plaintextTokens, cause error) error {
+	reason := strings.TrimPrefix(cause.Error(), ErrRefreshPermanent.Error()+": ")
+	if len(reason) > reloginReasonMax {
+		reason = reason[:reloginReasonMax]
+	}
+	if cur == nil {
+		return reloginError(st.cfg, reason)
+	}
+	next := *cur
+	next.relogin = reason
+	if err := m.saveFile(st.cfg, next); err != nil {
+		m.logger.Printf("oauth: %s: persist relogin mark: %v", st.cfg.Name, err)
+	}
+	st.tokens.Store(&next)
+	m.logger.Printf("oauth: %s grant rejected; refusing further refreshes until `%s`", st.cfg.Name, reloginCommand(st.cfg))
+	return reloginError(st.cfg, reason)
+}
+
+func reloginError(cfg Config, reason string) error {
+	return fmt.Errorf("%w: %s: run `%s`", ErrRefreshPermanent, reason, reloginCommand(cfg))
+}
+
+func reloginCommand(cfg Config) string {
+	if cfg.Grant == "" || cfg.Grant == GrantRefreshToken {
+		return "hush oauth login " + cfg.Name
+	}
+	return "hush oauth register " + cfg.Name
 }
 
 // currentRefresh and previousRefresh read a possibly-nil cached state.

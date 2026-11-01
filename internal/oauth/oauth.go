@@ -106,6 +106,8 @@ type plaintextTokens struct {
 
 	issuedAt  time.Time
 	expiresAt time.Time
+
+	relogin string
 }
 
 // newTokenState builds the cached state for a freshly minted token pair.
@@ -407,7 +409,7 @@ func (m *Manager) proactiveLoop(ctx context.Context, st *configState) {
 	backoff := time.Second
 	for {
 		p := st.tokens.Load()
-		if p == nil {
+		if p == nil || p.relogin != "" {
 			return
 		}
 		wait := proactiveWait(*p, time.Now())

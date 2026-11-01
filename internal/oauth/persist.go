@@ -36,6 +36,7 @@ type tomlForm struct {
 	// host, say). Plaintext so it can be read without unlocking, and
 	// rewritten on every mint so it can never outlive its token.
 	Metadata map[string]string `toml:"metadata,omitempty"`
+	Relogin  string            `toml:"relogin_required,omitempty"`
 }
 
 func (m *Manager) oauthDir() string {
@@ -96,6 +97,7 @@ func (m *Manager) loadFile(path string) (Config, plaintextTokens, error) {
 		metadata:    raw.Metadata,
 		prevRefresh: prevRefresh,
 		expiresAt:   time.UnixMilli(raw.ExpiresAt),
+		relogin:     raw.Relogin,
 	}
 	if raw.IssuedAt != 0 {
 		tok.issuedAt = time.UnixMilli(raw.IssuedAt)
@@ -134,6 +136,7 @@ func (m *Manager) saveFile(cfg Config, tok plaintextTokens) error {
 		RefreshToken:     encRefresh,
 		RefreshTokenPrev: encPrevRefresh,
 		ExpiresAt:        tok.expiresAt.UnixMilli(),
+		Relogin:          tok.relogin,
 	}
 	if !tok.issuedAt.IsZero() {
 		form.IssuedAt = tok.issuedAt.UnixMilli()

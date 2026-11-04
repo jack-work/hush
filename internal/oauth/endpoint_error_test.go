@@ -133,6 +133,37 @@ func TestTheLatchRedactsTheGrantsOwnTokens(t *testing.T) {
 	}
 }
 
+// A secret holding characters the cleaning drops, placed across the 120 cap,
+// must be redacted before cleaning splits or cuts it.
+func TestASecretAcrossTheCapIsRedactedWhole(t *testing.T) {
+	const refresh = "rt_9f8e7d6c5b4a3928=1706f5e4d3c2b1a0="
+	dir, key := t.TempDir(), newTestKey(t)
+	m, logs := loggedManager(t, dir, key)
+	if err := m.Register(testCfg, Tokens{AccessToken: leakAccess, RefreshToken: refresh, ExpiresIn: 600}); err != nil {
+		t.Fatalf("register: %v", err)
+	}
+	description := strings.Repeat("a", descriptionMax-30) + " " + refresh + " tail"
+	m.httpClient = echoDoer{status: 400, body: `{"error":"invalid_grant","error_description":"` + description + `"}`}
+
+	_, _, err := m.RefreshFull(testCfg.Name)
+	if !errors.Is(err, ErrRefreshPermanent) {
+		t.Fatalf("err = %v, want ErrRefreshPermanent", err)
+	}
+	_, disk, _, lerr := m.loadFile(m.filePath(testCfg.Name))
+	if lerr != nil {
+		t.Fatalf("load: %v", lerr)
+	}
+	for where, s := range map[string]string{"error": err.Error(), "mark": disk.relogin, "log": logs.String()} {
+		for _, part := range strings.Split(refresh, "=") {
+			for i := 0; i+12 <= len(part); i++ {
+				if piece := part[i : i+12]; strings.Contains(s, piece) {
+					t.Errorf("%s carries %q of the refresh token: %q", where, piece, s)
+				}
+			}
+		}
+	}
+}
+
 func TestScrubReasonRedactsKnownSecrets(t *testing.T) {
 	got := scrubReason("token endpoint 400: invalid_grant: no such token abcdefghij", "abcdefghij", "short")
 	if want := "token endpoint 400: invalid_grant: no such token " + redacted; got != want {
@@ -202,8 +233,8 @@ func TestEndpointDetail(t *testing.T) {
 		"long description":  {`{"error":"invalid_grant","error_description":"` + strings.Repeat("x ", 100) + `"}`, "invalid_grant: " + strings.Repeat("x ", 60)[:descriptionMax] + "..."},
 	} {
 		t.Run(name, func(t *testing.T) {
-			if got := endpointDetail([]byte(tc.body)); got != tc.want {
-				t.Errorf("endpointDetail = %q, want %q", got, tc.want)
+			if got := EndpointDetail([]byte(tc.body)); got != tc.want {
+				t.Errorf("EndpointDetail = %q, want %q", got, tc.want)
 			}
 		})
 	}

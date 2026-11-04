@@ -19,7 +19,7 @@ var (
 	quotedErrorRE = regexp.MustCompile(`"error"\s*:\s*"([A-Za-z0-9_.\-]{1,64})"`)
 )
 
-func endpointDetail(body []byte, secrets ...string) string {
+func EndpointDetail(body []byte, secrets ...string) string {
 	var e struct {
 		Error       string `json:"error"`
 		Description string `json:"error_description"`
@@ -28,7 +28,7 @@ func endpointDetail(body []byte, secrets ...string) string {
 		return fmt.Sprintf("body of %d bytes", len(body))
 	}
 	detail := e.Error
-	if d := cleanDescription(e.Description); d != "" {
+	if d := cleanDescription(redact(e.Description, secrets...)); d != "" {
 		detail += ": " + d
 	}
 	return redact(detail, secrets...)

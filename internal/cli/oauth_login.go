@@ -171,7 +171,7 @@ func exchangeCode(tokenURL, clientID, code, state, redirectURI, verifier string)
 
 	respBody, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != http.StatusOK {
-		return rawTokens{}, fmt.Errorf("token exchange failed (%d): %s", resp.StatusCode, string(respBody))
+		return rawTokens{}, fmt.Errorf("token exchange failed (%d): %s", resp.StatusCode, oauth.EndpointDetail(respBody, code, verifier, state))
 	}
 
 	var parsed struct {

@@ -86,7 +86,7 @@ func (copilotGrant) Mint(ctx context.Context, doer httpDoer, cfg Config, durable
 	body, _ := io.ReadAll(resp.Body)
 	if class := copilotStatusClass(resp.StatusCode); class != nil {
 		return Tokens{}, fmt.Errorf("%w: copilot token exchange %d: %s",
-			class, resp.StatusCode, endpointDetail(body, durable))
+			class, resp.StatusCode, EndpointDetail(body, durable))
 	}
 
 	var parsed struct {

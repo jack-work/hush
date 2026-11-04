@@ -87,7 +87,7 @@ func (entraGrant) Mint(ctx context.Context, doer httpDoer, cfg Config, durable s
 	}
 	_ = json.Unmarshal(body, &parsed)
 	if resp.StatusCode != http.StatusOK {
-		return Tokens{}, fmt.Errorf("%w: entra token endpoint %d: %s", entraClass(resp.StatusCode, parsed.Error), resp.StatusCode, endpointDetail(body, durable))
+		return Tokens{}, fmt.Errorf("%w: entra token endpoint %d: %s", entraClass(resp.StatusCode, parsed.Error), resp.StatusCode, EndpointDetail(body, durable))
 	}
 	if parsed.AccessToken == "" {
 		return Tokens{}, fmt.Errorf("%w: entra token endpoint returned no access_token", ErrRefreshPermanent)

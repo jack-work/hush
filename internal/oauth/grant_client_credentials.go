@@ -100,7 +100,7 @@ func (clientCredentialsGrant) Mint(ctx context.Context, doer httpDoer, cfg Confi
 	body, _ := io.ReadAll(resp.Body)
 	if class := httpStatusClass(resp.StatusCode); class != nil {
 		return Tokens{}, fmt.Errorf("%w: token endpoint %d: %s",
-			class, resp.StatusCode, firstLine(string(body)))
+			class, resp.StatusCode, endpointDetail(body, durable))
 	}
 
 	var parsed struct {

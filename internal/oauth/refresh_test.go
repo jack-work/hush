@@ -188,7 +188,7 @@ func TestRefreshFallsBackToPreviousToken(t *testing.T) {
 
 	// The recovered pair must be on disk, with R_good retained as the new
 	// predecessor so a second lost write is also survivable.
-	_, disk, err := m.loadFile(m.filePath(testCfg.Name))
+	_, disk, _, err := m.loadFile(m.filePath(testCfg.Name))
 	if err != nil {
 		t.Fatalf("load: %v", err)
 	}

@@ -54,23 +54,23 @@ func stripTOMLExt(s string) string {
 	return strings.TrimSuffix(s, ".toml")
 }
 
-func (m *Manager) loadFile(path string) (Config, plaintextTokens, error) {
+func (m *Manager) loadFile(path string) (Config, plaintextTokens, bool, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return Config{}, plaintextTokens{}, err
+		return Config{}, plaintextTokens{}, false, err
 	}
 	var raw tomlForm
 	if err := toml.Unmarshal(data, &raw); err != nil {
-		return Config{}, plaintextTokens{}, fmt.Errorf("parse toml: %w", err)
+		return Config{}, plaintextTokens{}, false, fmt.Errorf("parse toml: %w", err)
 	}
 
 	access, err := secrets.DecryptValue(raw.AccessToken, m.identities)
 	if err != nil {
-		return Config{}, plaintextTokens{}, fmt.Errorf("decrypt access_token: %w", err)
+		return Config{}, plaintextTokens{}, false, fmt.Errorf("decrypt access_token: %w", err)
 	}
 	refresh, err := secrets.DecryptValue(raw.RefreshToken, m.identities)
 	if err != nil {
-		return Config{}, plaintextTokens{}, fmt.Errorf("decrypt refresh_token: %w", err)
+		return Config{}, plaintextTokens{}, false, fmt.Errorf("decrypt refresh_token: %w", err)
 	}
 	var prevRefresh string
 	if raw.RefreshTokenPrev != "" {
@@ -97,12 +97,12 @@ func (m *Manager) loadFile(path string) (Config, plaintextTokens, error) {
 		metadata:    raw.Metadata,
 		prevRefresh: prevRefresh,
 		expiresAt:   time.UnixMilli(raw.ExpiresAt),
-		relogin:     raw.Relogin,
+		relogin:     scrubReason(raw.Relogin, access, refresh, prevRefresh),
 	}
 	if raw.IssuedAt != 0 {
 		tok.issuedAt = time.UnixMilli(raw.IssuedAt)
 	}
-	return cfg, tok, nil
+	return cfg, tok, tok.relogin != raw.Relogin, nil
 }
 
 // saveFile writes an OAuth config and its (plaintext) tokens to disk

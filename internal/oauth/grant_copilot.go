@@ -86,7 +86,7 @@ func (copilotGrant) Mint(ctx context.Context, doer httpDoer, cfg Config, durable
 	body, _ := io.ReadAll(resp.Body)
 	if class := copilotStatusClass(resp.StatusCode); class != nil {
 		return Tokens{}, fmt.Errorf("%w: copilot token exchange %d: %s",
-			class, resp.StatusCode, firstLine(string(body)))
+			class, resp.StatusCode, endpointDetail(body, durable))
 	}
 
 	var parsed struct {
@@ -138,16 +138,4 @@ func copilotStatusClass(status int) error {
 	default:
 		return ErrRefreshTransient
 	}
-}
-
-// firstLine keeps an error message readable when the body is a web page.
-func firstLine(s string) string {
-	s = strings.TrimSpace(s)
-	if i := strings.IndexByte(s, '\n'); i >= 0 {
-		s = s[:i]
-	}
-	if len(s) > 200 {
-		s = s[:200] + "…"
-	}
-	return s
 }

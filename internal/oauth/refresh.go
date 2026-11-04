@@ -154,6 +154,7 @@ func (m *Manager) latchRelogin(st *configState, cur *plaintextTokens, cause erro
 	if len(reason) > reloginReasonMax {
 		reason = reason[:reloginReasonMax]
 	}
+	reason = scrubReason(reason, tokenSecrets(cur)...)
 	if cur == nil {
 		return reloginError(st.cfg, reason)
 	}
@@ -198,7 +199,7 @@ func previousRefresh(p *plaintextTokens) string {
 // refreshed successfully after we loaded ours, so its rotated tokens
 // supersede our rejected ones.
 func (m *Manager) newerOnDisk(st *configState) (plaintextTokens, bool) {
-	_, tok, err := m.loadFile(m.filePath(st.cfg.Name))
+	_, tok, _, err := m.loadFile(m.filePath(st.cfg.Name))
 	if err != nil {
 		return plaintextTokens{}, false
 	}
@@ -207,4 +208,11 @@ func (m *Manager) newerOnDisk(st *configState) (plaintextTokens, bool) {
 		return plaintextTokens{}, false
 	}
 	return tok, true
+}
+
+func tokenSecrets(t *plaintextTokens) []string {
+	if t == nil {
+		return nil
+	}
+	return []string{t.access, t.refresh, t.prevRefresh}
 }

@@ -251,7 +251,7 @@ func TestCopilotStateSurvivesRestart(t *testing.T) {
 		t.Fatal("a secret was written in plaintext")
 	}
 
-	cfg, tok, err := m.loadFile(filepath.Join(m.oauthDir(), "copilot.toml"))
+	cfg, tok, _, err := m.loadFile(filepath.Join(m.oauthDir(), "copilot.toml"))
 	if err != nil {
 		t.Fatal(err)
 	}

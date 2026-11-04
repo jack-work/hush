@@ -66,7 +66,7 @@ func (refreshTokenGrant) Mint(ctx context.Context, doer httpDoer, cfg Config, du
 
 	body, _ := io.ReadAll(resp.Body)
 	if class := httpStatusClass(resp.StatusCode); class != nil {
-		return Tokens{}, fmt.Errorf("%w: token endpoint %d: %s", class, resp.StatusCode, string(body))
+		return Tokens{}, fmt.Errorf("%w: token endpoint %d: %s", class, resp.StatusCode, endpointDetail(body, durable))
 	}
 
 	var parsed struct {

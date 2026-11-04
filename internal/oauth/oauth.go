@@ -236,10 +236,17 @@ func (m *Manager) Start() error {
 			continue
 		}
 		path := filepath.Join(dir, e.Name())
-		cfg, tok, err := m.loadFile(path)
+		cfg, tok, scrubbed, err := m.loadFile(path)
 		if err != nil {
 			m.logger.Printf("oauth: load %s: %v", e.Name(), err)
 			continue
+		}
+		if scrubbed {
+			if err := m.saveFile(cfg, tok); err != nil {
+				m.logger.Printf("oauth: %s: rewrite scrubbed relogin mark: %v", cfg.Name, err)
+			} else {
+				m.logger.Printf("oauth: %s: relogin mark rewritten without the token endpoint's body", cfg.Name)
+			}
 		}
 		m.installState(cfg, tok)
 	}

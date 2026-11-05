@@ -126,3 +126,7 @@ note rather than a warning, and `--migrate` leaves the command alone. A
 command.toml without the key, or no command.toml at all, behaves as before.
 Rendered caller arguments (`{{.Args}}`) still warn: the declaration covers
 secrets only.
+
+The declaration is a reviewed record, not a control: command.toml is
+writable by the same user, and anything that can edit it can edit the script
+too. What protects the secret is what the script does with it.

@@ -10,9 +10,9 @@ import (
 
 	"github.com/BurntSushi/toml"
 	"github.com/spf13/cobra"
-	"github.com/zalando/go-keyring"
 	"golang.org/x/term"
 
+	"github.com/jack-work/hush/internal/oskeyring"
 	"github.com/jack-work/hush/internal/secrets"
 )
 
@@ -169,7 +169,7 @@ func runReset(cmd *cobra.Command, args []string) error {
 	// Best effort: a box with no Secret Service (headless, WSL) errors
 	// here for reasons that have nothing to do with the reset.
 	if svc, acct := cfg.Unlock.Keyring.Service, cfg.Unlock.Keyring.Account; svc != "" && acct != "" {
-		if err := keyring.Delete(svc, acct); err == nil {
+		if err := oskeyring.Delete(svc, acct); err == nil {
 			fmt.Fprintf(os.Stderr, "cleared keyring entry (service %q, account %q)\n", svc, acct)
 		}
 	}

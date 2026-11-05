@@ -8,7 +8,7 @@ import (
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
 
-	"github.com/zalando/go-keyring"
+	"github.com/jack-work/hush/internal/oskeyring"
 )
 
 // The keyring subcommand mirrors `hush oauth`: a parent command that
@@ -75,7 +75,7 @@ var keyringSetCmd = &cobra.Command{
 			second[i] = 0
 		}
 
-		if err := keyring.Set(svc, acct, string(first)); err != nil {
+		if err := oskeyring.Set(svc, acct, string(first)); err != nil {
 			return fmt.Errorf("keyring set (service=%q account=%q): %w", svc, acct, err)
 		}
 		for i := range first {
@@ -96,8 +96,8 @@ var keyringGetCmd = &cobra.Command{
 			return fmt.Errorf("unlock.keyring.service and .account must be set in hush.toml")
 		}
 
-		v, err := keyring.Get(svc, acct)
-		if errors.Is(err, keyring.ErrNotFound) {
+		v, err := oskeyring.Get(svc, acct)
+		if errors.Is(err, oskeyring.ErrNotFound) {
 			fmt.Fprintf(os.Stderr, "service=%q account=%q: ✗ not set\n", svc, acct)
 			os.Exit(1)
 			return nil
@@ -122,8 +122,8 @@ var keyringClearCmd = &cobra.Command{
 			return fmt.Errorf("unlock.keyring.service and .account must be set in hush.toml")
 		}
 
-		err := keyring.Delete(svc, acct)
-		if errors.Is(err, keyring.ErrNotFound) {
+		err := oskeyring.Delete(svc, acct)
+		if errors.Is(err, oskeyring.ErrNotFound) {
 			fmt.Fprintf(os.Stderr, "service=%q account=%q: nothing to clear\n", svc, acct)
 			return nil
 		}

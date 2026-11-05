@@ -5,7 +5,7 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/zalando/go-keyring"
+	"github.com/jack-work/hush/internal/oskeyring"
 )
 
 // keyringUnlocker fetches the passphrase from the OS keyring via
@@ -36,9 +36,9 @@ func (u *keyringUnlocker) Passphrase(_ context.Context) ([]byte, error) {
 	if u.account == "" {
 		return nil, fmt.Errorf("unlock method 'keyring' requires unlock.keyring.account")
 	}
-	v, err := keyring.Get(u.service, u.account)
+	v, err := oskeyring.Get(u.service, u.account)
 	if err != nil {
-		if errors.Is(err, keyring.ErrNotFound) {
+		if errors.Is(err, oskeyring.ErrNotFound) {
 			return nil, fmt.Errorf(
 				"%w: service=%q account=%q (seed it with `hush keyring set`)",
 				ErrKeyringEntryMissing, u.service, u.account)

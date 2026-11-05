@@ -45,12 +45,11 @@ import (
 
 	"golang.org/x/term"
 
-	"github.com/zalando/go-keyring"
-
 	"github.com/jack-work/hush/client"
 	"github.com/jack-work/hush/config"
 	"github.com/jack-work/hush/internal/agent"
 	"github.com/jack-work/hush/internal/identity"
+	"github.com/jack-work/hush/internal/oskeyring"
 	"github.com/jack-work/hush/internal/unlock"
 )
 
@@ -152,6 +151,8 @@ func (m Mode) String() string {
 const childConfigEnv = "HUSH_MANAGED_CONFIG_DIR"
 const childStateEnv = "HUSH_MANAGED_STATE_DIR"
 const childRuntimeEnv = "HUSH_MANAGED_RUNTIME_DIR"
+
+var ErrKeyringUnresponsive = oskeyring.ErrUnresponsive
 
 // IsAgentChild reports whether the current process was re-exec'd by managed
 // to serve as an embedded hush agent. Call this early in main().
@@ -646,7 +647,7 @@ func (h *Hush) finalizeBootstrap(pp []byte) ([]byte, error) {
 		svc := h.cfg.Unlock.Keyring.Service
 		acct := h.cfg.Unlock.Keyring.Account
 		if svc != "" && acct != "" {
-			if err := keyring.Set(svc, acct, string(pp)); err == nil {
+			if err := oskeyring.Set(svc, acct, string(pp)); err == nil {
 				fmt.Fprintf(os.Stderr, "[hush] \u2713 saved to OS keyring (service=%q account=%q) \u2014 next startup will be silent.\n", svc, acct)
 			} else {
 				fmt.Fprintf(os.Stderr, "[hush] note: couldn't save to keyring (%v); you'll be prompted again next startup.\n", err)

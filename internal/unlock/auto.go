@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/zalando/go-keyring"
+	"github.com/jack-work/hush/internal/oskeyring"
 )
 
 // autoUnlocker is the friction-free default. It tries the OS keyring
@@ -34,7 +34,7 @@ func (u *autoUnlocker) Passphrase(ctx context.Context) ([]byte, error) {
 	}
 
 	// 1. Try keyring read.
-	v, err := keyring.Get(u.service, u.account)
+	v, err := oskeyring.Get(u.service, u.account)
 	switch {
 	case err == nil && v != "":
 		pp := []byte(v)
@@ -44,14 +44,14 @@ func (u *autoUnlocker) Passphrase(ctx context.Context) ([]byte, error) {
 			// fail silently on every startup with no recovery path, so
 			// invalidate it and fall through to the prompt.
 			wipe(pp)
-			_ = keyring.Delete(u.service, u.account)
+			_ = oskeyring.Delete(u.service, u.account)
 			fmt.Fprintf(os.Stderr, "[hush] saved passphrase for %q no longer unlocks the identity (%v) — cleared it, prompting again.\n", u.service, verr)
 			return u.bootstrapViaKeyring(ctx)
 		}
 		// Cached. Silent path.
 		return pp, nil
 
-	case errors.Is(err, keyring.ErrNotFound):
+	case errors.Is(err, oskeyring.ErrNotFound):
 		// Keyring is reachable but has no entry yet. Prompt once,
 		// store it for next time, return it.
 		return u.bootstrapViaKeyring(ctx)
@@ -59,6 +59,14 @@ func (u *autoUnlocker) Passphrase(ctx context.Context) ([]byte, error) {
 	default:
 		// Other keyring errors (no provider, dbus broken, etc.) ->
 		// prompt-only fallback with a single hint.
+		if errors.Is(err, oskeyring.ErrUnresponsive) {
+			printKeyringUnresponsiveOnce(u.service, err)
+			pp, perr := u.prompt(ctx)
+			if perr != nil {
+				return nil, fmt.Errorf("%w, and asking instead failed: %w", err, perr)
+			}
+			return pp, nil
+		}
 		printKeyringUnavailableOnce(err)
 		return u.prompt(ctx)
 	}
@@ -87,7 +95,7 @@ func (u *autoUnlocker) bootstrapViaKeyring(ctx context.Context) ([]byte, error) 
 		wipe(pp)
 		return nil, fmt.Errorf("passphrase does not decrypt the identity — not saving to keyring: %w", verr)
 	}
-	if err := keyring.Set(u.service, u.account, string(pp)); err != nil {
+	if err := oskeyring.Set(u.service, u.account, string(pp)); err != nil {
 		// Don't fail the unlock just because the cache write failed —
 		// the user can still proceed; we just won't be silent next time.
 		fmt.Fprintf(os.Stderr, "[hush] warning: couldn't save passphrase to keyring (%v). You'll be prompted again next startup.\n", err)
@@ -109,6 +117,17 @@ func printKeyringUnavailableOnce(err error) {
 	keyringUnavailableHinted = true
 	fmt.Fprintf(os.Stderr, "[hush] no OS keyring available (%v). You'll be prompted for the passphrase on each startup.\n", err)
 	fmt.Fprintln(os.Stderr, "[hush] To fix on Linux: install gnome-keyring or KWallet. Or set unlock.method = \"exec\" in hush.toml to use `pass`/`rbw`/etc.")
+}
+
+var keyringUnresponsiveHinted = false
+
+func printKeyringUnresponsiveOnce(service string, err error) {
+	if keyringUnresponsiveHinted {
+		return
+	}
+	keyringUnresponsiveHinted = true
+	fmt.Fprintf(os.Stderr, "[hush] %v while reading the passphrase for %q; asking for it instead.\n", err, service)
+	fmt.Fprintln(os.Stderr, "[hush] The Secret Service (gnome-keyring-daemon or KWallet) is stuck; restarting it usually clears this.")
 }
 
 func wipe(b []byte) {

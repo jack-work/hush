@@ -38,7 +38,7 @@ const scriptFD = 3
 // The returned cleanup closes the descriptor and must be called once the
 // child has finished.
 func shellCommand(rendered, scriptName, argv0 string, args []string) (*exec.Cmd, func(), error) {
-	f, err := scriptFile(rendered)
+	f, err := scriptFile(closeScriptFD() + rendered)
 	if err != nil {
 		return nil, func() {}, err
 	}
@@ -48,6 +48,10 @@ func shellCommand(rendered, scriptName, argv0 string, args []string) (*exec.Cmd,
 	cmd := exec.Command("sh", argv...)
 	cmd.ExtraFiles = []*os.File{f}
 	return cmd, func() { f.Close() }, nil
+}
+
+func closeScriptFD() string {
+	return fmt.Sprintf("exec %d<&-\n", scriptFD)
 }
 
 // scriptFile puts the rendered script somewhere the child can read it and

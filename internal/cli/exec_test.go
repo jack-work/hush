@@ -304,3 +304,73 @@ func itoaFD(fd uintptr) string {
 	}
 	return string(b)
 }
+
+func fdTargets(out string) []string {
+	var hush []string
+	for _, line := range strings.Split(out, "\n") {
+		if strings.Contains(line, "hush-script") {
+			hush = append(hush, strings.TrimSpace(line))
+		}
+	}
+	return hush
+}
+
+// The rendered script reached sh on fd 3, a memfd that is not close-on-exec
+// in the child, and sh never closed it: every process the script started,
+// and any daemon it left behind, inherited the rendered text, secrets
+// included, readable by the same uid at /proc/<pid>/fd/3.
+func TestAProcessTheScriptStartsInheritsNoCopyOfTheScript(t *testing.T) {
+	spec := &Spec{Delivery: DeliveryScript}
+	script := "ls -l /proc/self/fd/; echo TOKEN_WAS={{.token}} >/dev/null; sh -c 'ls -l /proc/self/fd/'"
+	cmd, cleanup, err := buildChild(spec, "fdleak", "command.sh", script,
+		map[string]string{"token": "s3cr3t-canary-value"}, nil, nil)
+	defer cleanup()
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := capture(t, cmd, 10*time.Second)
+	if leaks := fdTargets(out); len(leaks) > 0 {
+		t.Fatalf("a process started by the script holds the script open:\n%s\nfull listing:\n%s", strings.Join(leaks, "\n"), out)
+	}
+	if !strings.Contains(out, "/proc/self/fd") && !strings.Contains(out, "->") {
+		t.Fatalf("the script did not list its children's descriptors:\n%s", out)
+	}
+}
+
+// Closing fd 3 must not cut the script short: the shell reads on through
+// its own descriptor, so a script far longer than any read buffer runs to
+// its last line.
+func TestALongScriptRunsToItsLastLineAfterFD3IsClosed(t *testing.T) {
+	var b strings.Builder
+	for i := 0; i < 5000; i++ {
+		b.WriteString(": padding line to push the script well past one read buffer\n")
+	}
+	b.WriteString("echo reached-the-end\n")
+	cmd, cleanup, err := buildChild(&Spec{Delivery: DeliveryScript}, "long", "command.sh",
+		b.String(), nil, nil, nil)
+	defer cleanup()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out := capture(t, cmd, 10*time.Second); !strings.Contains(out, "reached-the-end") {
+		t.Fatalf("the script stopped early:\n%s", out)
+	}
+}
+
+func TestEveryRenderedUnixScriptStartsByClosingFD3(t *testing.T) {
+	cmd, cleanup, err := shellCommand("echo hi\n", "command.sh", "hush-x", nil)
+	defer cleanup()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := cmd.ExtraFiles[0].Seek(0, 0); err != nil {
+		t.Fatal(err)
+	}
+	head := make([]byte, len(closeScriptFD()))
+	if _, err := cmd.ExtraFiles[0].Read(head); err != nil {
+		t.Fatal(err)
+	}
+	if string(head) != "exec 3<&-\n" {
+		t.Fatalf("script starts with %q, want the fd 3 close", head)
+	}
+}

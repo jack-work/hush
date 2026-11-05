@@ -81,7 +81,7 @@ func TestAKeyringThatAnswersIsPassedThroughUnchanged(t *testing.T) {
 
 // The bound is a constant: nothing an aria or a config file can write moves it.
 func TestTheBoundIsFiveSecondsByDefault(t *testing.T) {
-	if _, limit := current(); limit != 5*time.Second {
+	if _, limit, _ := current(); limit != 5*time.Second {
 		t.Fatalf("default bound is %s, want 5s", limit)
 	}
 }

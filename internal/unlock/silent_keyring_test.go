@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -124,7 +125,7 @@ func withStdinNotATerminal(t *testing.T) {
 func TestASilentKeyringWithNoTerminalFailsClosedAndSaysWhy(t *testing.T) {
 	useSilentKeyring(t)
 	withStdinNotATerminal(t)
-	keyringUnresponsiveHinted = false
+	keyringUnresponsiveHint = sync.Once{}
 	u, _ := New(autoCfg("hush-auto-test-silent-notty", "default"), Hooks{Verify: verifyOnly("good")})
 	var pp []byte
 	var err error
@@ -142,7 +143,7 @@ func TestASilentKeyringWithNoTerminalFailsClosedAndSaysWhy(t *testing.T) {
 
 func TestASilentKeyringNeverPutsThePassphraseOnStderrOrInTheError(t *testing.T) {
 	useSilentKeyring(t)
-	keyringUnresponsiveHinted = false
+	keyringUnresponsiveHint = sync.Once{}
 	const secret = "correct-horse-battery-staple"
 	u, _ := New(autoCfg("hush-auto-test-silent-secret", "default"), Hooks{
 		Verify: verifyOnly(secret),
@@ -166,5 +167,25 @@ func TestASilentKeyringNeverPutsThePassphraseOnStderrOrInTheError(t *testing.T) 
 	captureStderr(t, func() { _, err = passphraseWithin(t, u) })
 	if err == nil || strings.Contains(err.Error(), secret) {
 		t.Fatalf("err = %v", err)
+	}
+}
+
+// Concurrent unlocks against a stuck keyring printed the hint from a plain
+// bool, a data race; now it prints exactly once and -race stays quiet.
+func TestTheStuckKeyringHintPrintsOnceUnderConcurrentUnlocks(t *testing.T) {
+	keyringUnresponsiveHint = sync.Once{}
+	logged := captureStderr(t, func() {
+		var wg sync.WaitGroup
+		for i := 0; i < 32; i++ {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				printKeyringUnresponsiveOnce("hush-hint-test", oskeyring.ErrUnresponsive)
+			}()
+		}
+		wg.Wait()
+	})
+	if n := strings.Count(logged, "while reading the passphrase"); n != 1 {
+		t.Fatalf("hint printed %d times, want once:\n%s", n, logged)
 	}
 }

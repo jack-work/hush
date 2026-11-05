@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"sync"
 
 	"github.com/jack-work/hush/internal/oskeyring"
 )
@@ -105,29 +106,22 @@ func (u *autoUnlocker) bootstrapViaKeyring(ctx context.Context) ([]byte, error) 
 	return pp, nil
 }
 
-// keyringUnavailableHinted ensures the "no keyring" hint prints only
-// once per process. Important because the same backend may be invoked
-// multiple times in some flows (e.g. lazy re-unlock after TTL).
-var keyringUnavailableHinted = false
+var keyringUnavailableHint sync.Once
 
 func printKeyringUnavailableOnce(err error) {
-	if keyringUnavailableHinted {
-		return
-	}
-	keyringUnavailableHinted = true
-	fmt.Fprintf(os.Stderr, "[hush] no OS keyring available (%v). You'll be prompted for the passphrase on each startup.\n", err)
-	fmt.Fprintln(os.Stderr, "[hush] To fix on Linux: install gnome-keyring or KWallet. Or set unlock.method = \"exec\" in hush.toml to use `pass`/`rbw`/etc.")
+	keyringUnavailableHint.Do(func() {
+		fmt.Fprintf(os.Stderr, "[hush] no OS keyring available (%v). You'll be prompted for the passphrase on each startup.\n", err)
+		fmt.Fprintln(os.Stderr, "[hush] To fix on Linux: install gnome-keyring or KWallet. Or set unlock.method = \"exec\" in hush.toml to use `pass`/`rbw`/etc.")
+	})
 }
 
-var keyringUnresponsiveHinted = false
+var keyringUnresponsiveHint sync.Once
 
 func printKeyringUnresponsiveOnce(service string, err error) {
-	if keyringUnresponsiveHinted {
-		return
-	}
-	keyringUnresponsiveHinted = true
-	fmt.Fprintf(os.Stderr, "[hush] %v while reading the passphrase for %q; asking for it instead.\n", err, service)
-	fmt.Fprintln(os.Stderr, "[hush] The Secret Service (gnome-keyring-daemon or KWallet) is stuck; restarting it usually clears this.")
+	keyringUnresponsiveHint.Do(func() {
+		fmt.Fprintf(os.Stderr, "[hush] %v while reading the passphrase for %q; asking for it instead.\n", err, service)
+		fmt.Fprintln(os.Stderr, "[hush] The Secret Service (gnome-keyring-daemon or KWallet) is stuck; restarting it usually clears this.")
+	})
 }
 
 func wipe(b []byte) {

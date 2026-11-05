@@ -107,3 +107,22 @@ ok   files          exec    runs /usr/bin/aws directly, no interpreter
 | `internal/cli/exec.go` | `childEnv`, the one place the layers are assembled |
 | `internal/cli/doctor.go` | `envFindings` |
 | `e2e/env_test.go` | precedence and refusals through the real binary |
+
+## Declared script delivery
+
+A command that renders its secrets into the script text is warned about by
+`hush doctor`, and `hush doctor --migrate` suggests env delivery for it. Some
+commands are better off with the script: one that pipes a secret into a
+program on stdin would, under env delivery, put that secret in the program's
+environment and in every child it starts. Writing the choice down makes it a
+reviewed one:
+
+```toml
+delivery = "script"
+```
+
+With the key set in so many words, doctor reports the rendered secrets as a
+note rather than a warning, and `--migrate` leaves the command alone. A
+command.toml without the key, or no command.toml at all, behaves as before.
+Rendered caller arguments (`{{.Args}}`) still warn: the declaration covers
+secrets only.

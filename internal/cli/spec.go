@@ -81,6 +81,8 @@ type Spec struct {
 
 	// path records where this spec was loaded from, or "" for a default.
 	path string
+
+	scriptDeclared bool
 }
 
 // Duration is a time.Duration that unmarshals from a TOML string ("30s").
@@ -109,6 +111,10 @@ func (s *Spec) EnvDelivery() bool {
 	return s.Delivery == DeliveryEnv || s.Scriptless()
 }
 
+// ScriptDeclared reports whether command.toml says delivery = "script" in so
+// many words: a reviewed choice, as opposed to the legacy default.
+func (s *Spec) ScriptDeclared() bool { return s.scriptDeclared }
+
 // NeedsOAuth reports whether this command draws on a hush oauth credential.
 func (s *Spec) NeedsOAuth() bool { return len(s.OAuth) > 0 }
 
@@ -128,6 +134,7 @@ func LoadSpec(cmdDir string) (*Spec, error) {
 		return nil, fmt.Errorf("parse %s: %w", p, err)
 	}
 	s.path = p
+	s.scriptDeclared = s.Delivery == DeliveryScript
 	if s.Delivery == "" {
 		if s.Exec != "" {
 			s.Delivery = DeliveryEnv

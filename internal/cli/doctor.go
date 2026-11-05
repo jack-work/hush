@@ -50,9 +50,10 @@ type finding struct {
 }
 
 type diagnosis struct {
-	name     string
-	delivery string
-	findings []finding
+	name           string
+	delivery       string
+	scriptDeclared bool
+	findings       []finding
 }
 
 func (d diagnosis) worst() level {
@@ -115,7 +116,7 @@ func runDoctor(cmd *cobra.Command, args []string) error {
 		}
 		if d.worst() == levelWarn {
 			warned++
-			if doctorMigrate {
+			if doctorMigrate && !d.scriptDeclared {
 				fmt.Print(migrationHint(d))
 			}
 		}
@@ -137,7 +138,7 @@ func diagnose(name string) (diagnosis, error) {
 		return diagnosis{}, err
 	}
 
-	d := diagnosis{name: name, delivery: spec.Delivery}
+	d := diagnosis{name: name, delivery: spec.Delivery, scriptDeclared: spec.ScriptDeclared()}
 	if spec.Scriptless() {
 		d.delivery = "exec"
 		d.findings = append(d.findings, finding{levelOK, "runs " + spec.Exec + " directly, no interpreter"})
@@ -178,7 +179,12 @@ func diagnose(name string) (diagnosis, error) {
 			}
 		}
 		used = dedupe(used)
-		if len(used) > 0 {
+		switch {
+		case len(used) == 0:
+		case spec.ScriptDeclared():
+			d.findings = append(d.findings, finding{levelNote,
+				"secrets rendered into script text by declaration (delivery = \"script\"): " + strings.Join(used, ", ")})
+		default:
 			d.findings = append(d.findings, finding{levelWarn,
 				"secrets rendered into script text: " + strings.Join(used, ", ")})
 		}

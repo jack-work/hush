@@ -3,6 +3,9 @@ package unlock
 import (
 	"context"
 	"errors"
+	"io"
+	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -83,5 +86,85 @@ func TestKeyringUnlockerFailsWithinTheBoundWhenTheKeyringNeverAnswers(t *testing
 	_, err := passphraseWithin(t, u)
 	if !errors.Is(err, oskeyring.ErrUnresponsive) {
 		t.Fatalf("err = %v, want ErrUnresponsive", err)
+	}
+}
+
+func captureStderr(t *testing.T, run func()) string {
+	t.Helper()
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	prev := os.Stderr
+	os.Stderr = w
+	defer func() { os.Stderr = prev }()
+	run()
+	w.Close()
+	out, _ := io.ReadAll(r)
+	return string(out)
+}
+
+func withStdinNotATerminal(t *testing.T) {
+	t.Helper()
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	prev := os.Stdin
+	os.Stdin = r
+	t.Cleanup(func() {
+		os.Stdin = prev
+		r.Close()
+		w.Close()
+	})
+}
+
+// Fail closed: with no terminal to ask on, a keyring that never answers ends
+// in an error that names it, with no passphrase and no other source tried.
+func TestASilentKeyringWithNoTerminalFailsClosedAndSaysWhy(t *testing.T) {
+	useSilentKeyring(t)
+	withStdinNotATerminal(t)
+	keyringUnresponsiveHinted = false
+	u, _ := New(autoCfg("hush-auto-test-silent-notty", "default"), Hooks{Verify: verifyOnly("good")})
+	var pp []byte
+	var err error
+	captureStderr(t, func() { pp, err = passphraseWithin(t, u) })
+	if pp != nil {
+		t.Fatalf("got a passphrase %q from a keyring that never answered", pp)
+	}
+	if !errors.Is(err, oskeyring.ErrUnresponsive) {
+		t.Fatalf("err = %v, want ErrUnresponsive", err)
+	}
+	if !strings.Contains(err.Error(), "OS keyring did not answer") {
+		t.Fatalf("error %q does not name the keyring", err)
+	}
+}
+
+func TestASilentKeyringNeverPutsThePassphraseOnStderrOrInTheError(t *testing.T) {
+	useSilentKeyring(t)
+	keyringUnresponsiveHinted = false
+	const secret = "correct-horse-battery-staple"
+	u, _ := New(autoCfg("hush-auto-test-silent-secret", "default"), Hooks{
+		Verify: verifyOnly(secret),
+		Prompt: promptWith(secret),
+	})
+	var err error
+	logged := captureStderr(t, func() { _, err = passphraseWithin(t, u) })
+	if err != nil {
+		t.Fatalf("Passphrase: %v", err)
+	}
+	if strings.Contains(logged, secret) {
+		t.Fatalf("the passphrase reached stderr:\n%s", logged)
+	}
+	if !strings.Contains(logged, "OS keyring did not answer") {
+		t.Fatalf("stderr does not say the keyring was stuck:\n%s", logged)
+	}
+
+	u, _ = New(autoCfg("hush-auto-test-silent-secret2", "default"), Hooks{
+		Prompt: func(context.Context) ([]byte, error) { return nil, errors.New("no terminal") },
+	})
+	captureStderr(t, func() { _, err = passphraseWithin(t, u) })
+	if err == nil || strings.Contains(err.Error(), secret) {
+		t.Fatalf("err = %v", err)
 	}
 }

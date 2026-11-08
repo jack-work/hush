@@ -255,7 +255,7 @@ func spawnDaemon(id *identity.DecryptedIdentity, ttl time.Duration) error {
 		childArgs = append(childArgs, "--ttl", flagTTL)
 	}
 
-	if _, err := daemon.Spawn(exe, childArgs, nil, id); err != nil {
+	if _, err := daemon.Spawn(exe, childArgs, nil, id, agentPlacement()); err != nil {
 		return err
 	}
 
@@ -334,4 +334,8 @@ func newLogger(stateDir string) (*log.Logger, *os.File, error) {
 	}
 
 	return log.New(w, "hush: ", log.LstdFlags), logFile, nil
+}
+
+func agentPlacement() daemon.Options {
+	return daemon.Options{LogPath: filepath.Join(cfg.StateDir, "agent.log"), Instance: cfg.RuntimeDir}
 }

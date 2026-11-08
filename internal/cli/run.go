@@ -179,7 +179,7 @@ func spawnDaemonWithID(id *identity.DecryptedIdentity, ttl time.Duration) error 
 		return fmt.Errorf("find executable: %w", err)
 	}
 
-	if _, err := daemon.Spawn(exe, []string{"up", "--ttl", ttl.String()}, nil, id); err != nil {
+	if _, err := daemon.Spawn(exe, []string{"up", "--ttl", ttl.String()}, nil, id, agentPlacement()); err != nil {
 		return err
 	}
 

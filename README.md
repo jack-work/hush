@@ -119,6 +119,8 @@ account = "default"
 
 priority: flags, then env (`HUSH_TTL`, `HUSH_IDENTITY`, `HUSH_CONFIG_DIR` / `HUSH_STATE_DIR` / `HUSH_RUNTIME_DIR`), then config, then XDG defaults. your word is final. the `HUSH_*` directory overrides let dev shells and embedded callers pin every singleton without colliding with your real one.
 
+the agent I start in the background leads its own session and writes its stderr to `agent.log` in my state dir. where a systemd user manager answers from a directory you own alone (`$XDG_RUNTIME_DIR/systemd`), I also move it into a transient scope of its own, `hush-agent-<instance>-<pid>.scope`, so the unit that started it (a reminder, an update job) does not take it down when it ends. `HUSH_NO_AGENT_SCOPE=1` keeps it in its spawner's cgroup; tests set it.
+
 seed the keyring once (`hush keyring set`, double-prompts, never prints it) and with a long ttl you type your passphrase once a session. headless box with no Secret Service? `method = "exec"` needs no dbus, and `method = "file"` needs no helper either: the passphrase sits in a file I refuse to read unless it is 0600. `hush status` always names the method in play.
 
 ## embedding me

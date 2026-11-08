@@ -48,6 +48,7 @@ import (
 	"github.com/jack-work/hush/client"
 	"github.com/jack-work/hush/config"
 	"github.com/jack-work/hush/internal/agent"
+	"github.com/jack-work/hush/internal/daemon"
 	"github.com/jack-work/hush/internal/identity"
 	"github.com/jack-work/hush/internal/oskeyring"
 	"github.com/jack-work/hush/internal/unlock"
@@ -559,7 +560,10 @@ func (h *Hush) startEmbedded() error {
 		args = []string{}
 	}
 
-	pid, err := agent.SpawnDaemon(exe, args, env, id)
+	pid, err := agent.SpawnDaemon(exe, args, env, id, daemon.Options{
+		LogPath:  filepath.Join(h.cfg.StateDir, "agent.log"),
+		Instance: h.cfg.RuntimeDir,
+	})
 	if err != nil {
 		return err
 	}

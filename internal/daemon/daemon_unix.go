@@ -7,6 +7,8 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"syscall"
 	"time"
 )
 
@@ -14,7 +16,7 @@ import (
 // appended to the child's environment; ChildEnvVar is set automatically.
 // The identity is written to the child over an inherited pipe (fd 3) and
 // zeroed by WriteTo. Returns the child pid.
-func Spawn(exe string, args, extraEnv []string, id io.WriterTo) (int, error) {
+func Spawn(exe string, args, extraEnv []string, id io.WriterTo, opts Options) (int, error) {
 	pr, pw, err := os.Pipe()
 	if err != nil {
 		return 0, fmt.Errorf("create pipe: %w", err)
@@ -26,12 +28,27 @@ func Spawn(exe string, args, extraEnv []string, id io.WriterTo) (int, error) {
 	child.ExtraFiles = []*os.File{pr}
 	child.Stdin = nil
 	child.Stdout = nil
-	child.Stderr = nil
+	child.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	var logf *os.File
+	if opts.LogPath != "" {
+		if err := os.MkdirAll(filepath.Dir(opts.LogPath), 0o700); err == nil {
+			if f, err := os.OpenFile(opts.LogPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600); err == nil {
+				logf = f
+				child.Stderr = f
+				defer f.Close()
+			}
+		}
+	}
 
 	if err := child.Start(); err != nil {
 		pw.Close()
 		pr.Close()
 		return 0, fmt.Errorf("start daemon: %w", err)
+	}
+	if place, ok := placeAgent(os.Getenv, ownManagerSocket, opts.Instance); ok {
+		if err := moveIntoScope(place, child.Process.Pid); err != nil && logf != nil {
+			fmt.Fprintf(logf, "hush: agent left in the spawner's cgroup, so it ends with the spawner's unit: %v\n", err)
+		}
 	}
 
 	pr.Close() // parent does not read

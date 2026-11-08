@@ -31,9 +31,9 @@ const SpawnEnvVar = daemon.ChildEnvVar
 //
 // After return, the caller should use WaitForAgent to confirm the daemon
 // is responsive.
-func SpawnDaemon(exe string, args []string, env []string, id *identity.DecryptedIdentity) (pid int, err error) {
+func SpawnDaemon(exe string, args []string, env []string, id *identity.DecryptedIdentity, opts daemon.Options) (pid int, err error) {
 	defer id.Zero()
-	return daemon.Spawn(exe, args, env, id)
+	return daemon.Spawn(exe, args, env, id, opts)
 }
 
 // RunChildFromPipe is the entry point for a re-exec'd daemon child.

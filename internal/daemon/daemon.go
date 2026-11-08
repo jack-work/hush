@@ -1,8 +1,7 @@
 // Package daemon spawns the hush agent as a detached background process
 // and hands it the decrypted identity out-of-band, never through disk.
 //
-// Unix: the identity travels over an inherited pipe (fd 3) and the child
-// detaches by re-exec with no controlling terminal.
+// Unix: the identity travels over an inherited pipe (fd 3).
 //
 // Windows: the child is created outside the caller's job object (so it
 // survives the launching terminal, which Windows Terminal and VS Code
@@ -20,3 +19,8 @@ const ChildEnvVar = "HUSH_AGENT_CHILD"
 // identitySockEnv names the AF_UNIX handoff socket on Windows. It is an
 // internal contract between Spawn and ReadIdentity.
 const identitySockEnv = "HUSH_IDENTITY_SOCK"
+
+type Options struct {
+	LogPath  string
+	Instance string
+}

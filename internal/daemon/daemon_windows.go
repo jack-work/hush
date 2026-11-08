@@ -27,7 +27,7 @@ const handoffTimeout = 15 * time.Second
 // process inherits only the user's base environment. Returns the pid of
 // the launched process (the launcher wrapper, not the agent; read
 // agent.pid for the agent's own pid once it is up).
-func Spawn(exe string, args, extraEnv []string, id io.WriterTo) (int, error) {
+func Spawn(exe string, args, extraEnv []string, id io.WriterTo, _ Options) (int, error) {
 	sockPath := filepath.Join(os.TempDir(),
 		fmt.Sprintf("hush-handoff-%d-%d.sock", os.Getpid(), time.Now().UnixNano()))
 	os.Remove(sockPath)

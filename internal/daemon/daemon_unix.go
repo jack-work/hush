@@ -29,15 +29,10 @@ func Spawn(exe string, args, extraEnv []string, id io.WriterTo, opts Options) (i
 	child.Stdin = nil
 	child.Stdout = nil
 	child.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
-	var logf *os.File
-	if opts.LogPath != "" {
-		if err := os.MkdirAll(filepath.Dir(opts.LogPath), 0o700); err == nil {
-			if f, err := os.OpenFile(opts.LogPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600); err == nil {
-				logf = f
-				child.Stderr = f
-				defer f.Close()
-			}
-		}
+	logf := openAgentLog(opts.LogPath)
+	if logf != nil {
+		child.Stderr = logf
+		defer logf.Close()
 	}
 
 	if err := child.Start(); err != nil {
@@ -59,6 +54,25 @@ func Spawn(exe string, args, extraEnv []string, id io.WriterTo, opts Options) (i
 	pw.Close()
 
 	return child.Process.Pid, nil
+}
+
+const agentLogMax = 1 << 20
+
+func openAgentLog(path string) *os.File {
+	if path == "" {
+		return nil
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return nil
+	}
+	if fi, err := os.Lstat(path); err == nil && fi.Mode().IsRegular() && fi.Size() > agentLogMax {
+		_ = os.Rename(path, path+".1")
+	}
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND|syscall.O_NOFOLLOW, 0o600)
+	if err != nil {
+		return nil
+	}
+	return f
 }
 
 // CleanAgentLogs is a no-op on Unix. On Windows, it removes stale

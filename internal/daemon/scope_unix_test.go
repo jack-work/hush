@@ -112,3 +112,40 @@ func TestASpawnedAgentLeadsItsOwnSessionAndLogsItsStderr(t *testing.T) {
 		time.Sleep(20 * time.Millisecond)
 	}
 }
+
+// El Inspector XII: the agent is long-lived and its log append-only, so a
+// full log rolls to agent.log.1 at the next spawn; a symlink in its place is
+// never followed.
+func TestAFullAgentLogRollsOverAtTheNextSpawn(t *testing.T) {
+	log := filepath.Join(t.TempDir(), "agent.log")
+	if err := os.WriteFile(log, bytes.Repeat([]byte("x"), agentLogMax+1), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	f := openAgentLog(log)
+	if f == nil {
+		t.Fatal("the log did not open")
+	}
+	defer f.Close()
+	if fi, _ := f.Stat(); fi.Size() != 0 {
+		t.Fatalf("the full log was appended to (%d bytes), not rolled", fi.Size())
+	}
+	if fi, err := os.Stat(log + ".1"); err != nil || fi.Size() != agentLogMax+1 {
+		t.Fatalf("the full log was not kept as agent.log.1: %v", err)
+	}
+}
+
+func TestAnAgentLogThatIsASymlinkIsNotFollowed(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "elsewhere")
+	if err := os.WriteFile(target, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	log := filepath.Join(dir, "agent.log")
+	if err := os.Symlink(target, log); err != nil {
+		t.Fatal(err)
+	}
+	if f := openAgentLog(log); f != nil {
+		f.Close()
+		t.Fatal("the agent's log followed a symlink")
+	}
+}

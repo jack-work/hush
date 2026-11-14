@@ -55,10 +55,6 @@ func (l *Login) chatGPT(ctx context.Context, in Instance) (oauth.Tokens, error) 
 		q, err := url.ParseQuery(r.URL.RawQuery)
 		if err != nil || len(q["state"]) != 1 || subtle.ConstantTimeCompare([]byte(q.Get("state")), []byte(state)) != 1 {
 			http.Error(w, "invalid state", 400)
-			select {
-			case results <- loginCallback{err: errors.New("ChatGPT callback state mismatch")}:
-			default:
-			}
 			return
 		}
 		if q.Get("error") != "" || len(q["code"]) != 1 || q.Get("code") == "" || len(q.Get("code")) > 8192 {
@@ -78,7 +74,7 @@ func (l *Login) chatGPT(ctx context.Context, in Instance) (oauth.Tokens, error) 
 	})}
 	defer srv.Close()
 	go srv.Serve(ln)
-	q := url.Values{"client_id": {oauth.ChatGPTClientID}, "redirect_uri": {oauth.ChatGPTRedirectURI}, "response_type": {"code"}, "scope": {oauth.ChatGPTScopes}, "code_challenge": {pkce.Challenge}, "code_challenge_method": {"S256"}, "state": {state}, "id_token_add_organizations": {"true"}, "codex_cli_simplified_flow": {"true"}, "originator": {"codex_cli_rs"}}
+	q := url.Values{"client_id": {oauth.ChatGPTClientID}, "redirect_uri": {oauth.ChatGPTRedirectURI}, "response_type": {"code"}, "scope": {oauth.ChatGPTScopes}, "code_challenge": {pkce.Challenge}, "code_challenge_method": {"S256"}, "state": {state}, "id_token_add_organizations": {"true"}, "codex_cli_simplified_flow": {"true"}, "originator": {"codex_cli_rs"}, "prompt": {"login"}}
 	fmt.Fprintf(l.Out, "Open this URL for a fresh ChatGPT login:\n\n%s?%s\n\n", oauth.ChatGPTAuthorizeURL, q.Encode())
 	var result loginCallback
 	select {

@@ -132,13 +132,25 @@ func TestChatGPTLoopbackPKCEAndAtomicMinterTuple(t *testing.T) {
 			}
 			io.Copy(io.Discard, response.Body)
 			response.Body.Close()
-			err = <-done
 			if mode == "state" {
-				if err == nil || posts != 0 {
+				if response.StatusCode != 400 || posts != 0 {
 					t.Fatal("foreign state spent code")
 				}
-				return
+				select {
+				case <-done:
+					t.Fatal("foreign callback cancelled pending login")
+				default:
+				}
+				request, _ = http.NewRequest("GET", "http://"+callback.Addr().String()+"/auth/callback?"+url.Values{"state": {q.Get("state")}, "code": {"CODE_NEVER_LOG"}}.Encode(), nil)
+				request.Host = "localhost:1455"
+				response, err = http.DefaultClient.Do(request)
+				if err != nil {
+					t.Fatal(err)
+				}
+				io.Copy(io.Discard, response.Body)
+				response.Body.Close()
 			}
+			err = <-done
 			if err != nil {
 				t.Fatal(err)
 			}

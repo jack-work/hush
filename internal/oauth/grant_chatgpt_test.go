@@ -152,7 +152,7 @@ func TestChatGPTRejectsAccountChangesAndFailedPersistence(t *testing.T) {
 				t.Fatal("invalid successor published")
 			}
 			got, _ := m.Lease(cfg.Name)
-			if got.AccessToken != seed.AccessToken || got.AccountID != "account_1" {
+			if got.AccessToken != seed.AccessToken || got.AccountID != "account_1" || m.lookup(cfg.Name).tokens.Load().refresh != seed.RefreshToken {
 				t.Fatal("old tuple replaced")
 			}
 			if strings.Contains(logs.String(), "successor-secret") {
@@ -240,5 +240,38 @@ func TestChatGPTPublishedRotationSurvivesProcessCrash(t *testing.T) {
 	state := next.lookup(cfg.Name).tokens.Load()
 	if state.refresh != "persisted-successor" || state.metadata["account_id"] != "account_1" || state.access == "" {
 		t.Fatal("published rotated tuple lost after process crash")
+	}
+}
+
+type testTokenTransport func(*http.Request) (*http.Response, error)
+
+func (f testTokenTransport) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+func TestChatGPTTokenRedirectDoesNotSpendRefreshAgain(t *testing.T) {
+	var redirected atomic.Int32
+	foreign := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { redirected.Add(1); w.WriteHeader(200) }))
+	defer foreign.Close()
+	first := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Location", foreign.URL+"/TOKEN_CANARY")
+		w.WriteHeader(307)
+	}))
+	defer first.Close()
+	target, _ := url.Parse(first.URL)
+	client := first.Client()
+	transport := client.Transport
+	client.Transport = testTokenTransport(func(req *http.Request) (*http.Response, error) {
+		if req.URL.String() != ChatGPTTokenURL {
+			return http.DefaultTransport.RoundTrip(req)
+		}
+		clone := req.Clone(req.Context())
+		u := *req.URL
+		u.Scheme = target.Scheme
+		u.Host = target.Host
+		clone.URL = &u
+		return transport.RoundTrip(clone)
+	})
+	_, err := chatGPTGrant{}.Mint(context.Background(), client, chatGPTConfig(), "REFRESH_CANARY")
+	if err == nil || redirected.Load() != 0 || strings.Contains(err.Error(), "TOKEN_CANARY") || strings.Contains(err.Error(), "REFRESH_CANARY") {
+		t.Fatalf("redirect not contained: count%d err%v", redirected.Load(), err)
 	}
 }

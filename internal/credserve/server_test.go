@@ -160,7 +160,7 @@ func (r *rig) start(allow uint32) {
 	if err := r.mgr.Start(); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(r.mgr.Stop)
+	t.Cleanup(func() { _ = r.mgr.Stop() })
 	r.srv = NewServer(r.cfg, r.mgr, allow, log.New(r.logs, "", 0))
 
 	dir, err := os.MkdirTemp("", "credsock-*")

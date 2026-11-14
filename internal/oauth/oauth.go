@@ -180,10 +180,16 @@ type refreshOp struct {
 
 // Manager owns all OAuth state for the agent.
 type Manager struct {
-	stateDir   string
-	identities []age.Identity
-	recipient  age.Recipient
-	logger     *log.Logger
+	lifeMu         sync.Mutex
+	work           sync.WaitGroup
+	stopping       bool
+	stopped        chan struct{}
+	drainUncertain bool
+	stopErr        error
+	stateDir       string
+	identities     []age.Identity
+	recipient      age.Recipient
+	logger         *log.Logger
 
 	mu      sync.RWMutex
 	configs map[string]*configState
@@ -194,8 +200,13 @@ type Manager struct {
 	// httpClient is overridable for tests.
 	httpClient httpDoer
 
-	now    func() time.Time
-	jitter func(time.Duration) time.Duration
+	now           func() time.Time
+	jitter        func(time.Duration) time.Duration
+	after         func(time.Duration) <-chan time.Time
+	removeFile    func(string) error
+	syncFile      func(*os.File) error
+	renameFile    func(string, string) error
+	syncDirectory func(*os.File) error
 }
 
 // NewManager builds a manager rooted at stateDir. Call Start to load
@@ -203,22 +214,31 @@ type Manager struct {
 func NewManager(stateDir string, identities []age.Identity, recipient age.Recipient, logger *log.Logger) *Manager {
 	ctx, cancel := context.WithCancel(context.Background())
 	return &Manager{
-		stateDir:   stateDir,
-		identities: identities,
-		recipient:  recipient,
-		logger:     logger,
-		configs:    make(map[string]*configState),
-		ctx:        ctx,
-		cancel:     cancel,
-		httpClient: defaultHTTPClient(),
-		now:        time.Now,
-		jitter:     equalJitter,
+		stateDir:      stateDir,
+		identities:    identities,
+		recipient:     recipient,
+		logger:        logger,
+		configs:       make(map[string]*configState),
+		ctx:           ctx,
+		cancel:        cancel,
+		httpClient:    defaultHTTPClient(),
+		now:           time.Now,
+		jitter:        equalJitter,
+		after:         time.After,
+		removeFile:    os.Remove,
+		syncFile:      (*os.File).Sync,
+		renameFile:    os.Rename,
+		syncDirectory: (*os.File).Sync,
 	}
 }
 
 // Start loads any persisted configs and launches their proactive refresh
 // goroutines. Safe to call when no configs exist yet (returns nil).
 func (m *Manager) Start() error {
+	if err := m.begin(); err != nil {
+		return err
+	}
+	defer m.work.Done()
 	dir := m.oauthDir()
 	entries, err := os.ReadDir(dir)
 	if err != nil {
@@ -253,23 +273,15 @@ func (m *Manager) Start() error {
 	return nil
 }
 
-// Stop cancels all proactive refresh goroutines and clears in-memory
-// plaintext caches. Call from the agent's shutdown path.
-func (m *Manager) Stop() {
-	m.cancel()
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	for _, st := range m.configs {
-		// Zeroing the plaintext is best-effort; Go strings are immutable.
-		st.tokens.Store(nil)
-	}
-}
-
 // Register creates or replaces the config and tokens for name. The new
 // tokens are persisted and become immediately visible to readers. The
 // previous proactive refresh goroutine (if any) is cancelled and a fresh
 // one is started.
 func (m *Manager) Register(cfg Config, tok Tokens) error {
+	if err := m.begin(); err != nil {
+		return err
+	}
+	defer m.work.Done()
 	if cfg.Name == "" {
 		return errors.New("oauth: config name is required")
 	}
@@ -285,8 +297,16 @@ func (m *Manager) Register(cfg Config, tok Tokens) error {
 	// access token here rather than leaving readers to discover on their
 	// first call whether the credential was ever any good.
 	if tok.AccessToken == "" && g.MintsOnRegister() {
-		minted, err := g.Mint(m.ctx, m.httpClient, cfg, tok.RefreshToken)
+		client, err := m.mintClient()
 		if err != nil {
+			return err
+		}
+		minted, err := g.Mint(m.ctx, client, cfg, tok.RefreshToken)
+		if err != nil {
+			if m.closing() {
+				m.uncertain()
+				return ErrStopped
+			}
 			return fmt.Errorf("oauth: %s: first mint failed: %w", cfg.Name, err)
 		}
 		tok = minted
@@ -313,6 +333,10 @@ func (m *Manager) Get(name string) (string, error) {
 // GetFull returns the cached access token and the metadata minted with it.
 // Same non-blocking contract as Get.
 func (m *Manager) GetFull(name string) (string, map[string]string, error) {
+	if err := m.begin(); err != nil {
+		return "", nil, err
+	}
+	defer m.work.Done()
 	st := m.lookup(name)
 	if st == nil {
 		return "", nil, ErrNotFound
@@ -326,6 +350,10 @@ func (m *Manager) GetFull(name string) (string, map[string]string, error) {
 
 // RefreshFull forces a mint and returns the new token with its metadata.
 func (m *Manager) RefreshFull(name string) (string, map[string]string, error) {
+	if err := m.begin(); err != nil {
+		return "", nil, err
+	}
+	defer m.work.Done()
 	tok, err := m.Refresh(name)
 	if err != nil {
 		return "", nil, err
@@ -355,6 +383,10 @@ func cloneMeta(m map[string]string) map[string]string {
 // Refresh forces a refresh for name, coalescing with any in-flight refresh
 // for the same config. Returns the new access token.
 func (m *Manager) Refresh(name string) (string, error) {
+	if err := m.begin(); err != nil {
+		return "", err
+	}
+	defer m.work.Done()
 	st := m.lookup(name)
 	if st == nil {
 		return "", ErrNotFound
@@ -364,6 +396,10 @@ func (m *Manager) Refresh(name string) (string, error) {
 
 // Delete removes the on-disk state and stops the proactive goroutine.
 func (m *Manager) Delete(name string) error {
+	if err := m.begin(); err != nil {
+		return err
+	}
+	defer m.work.Done()
 	m.mu.Lock()
 	st, ok := m.configs[name]
 	if ok {
@@ -376,21 +412,25 @@ func (m *Manager) Delete(name string) error {
 	}
 
 	path := m.filePath(name)
-	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+	if err := m.removeFile(path); err != nil && !os.IsNotExist(err) {
 		return err
 	}
 	return nil
 }
 
 // List returns the names of all currently registered OAuth configs.
-func (m *Manager) List() []string {
+func (m *Manager) List() ([]string, error) {
+	if err := m.begin(); err != nil {
+		return nil, err
+	}
+	defer m.work.Done()
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	names := make([]string, 0, len(m.configs))
 	for n := range m.configs {
 		names = append(names, n)
 	}
-	return names
+	return names, nil
 }
 
 // installState atomically replaces (or creates) the in-memory state for
@@ -408,7 +448,9 @@ func (m *Manager) installState(cfg Config, tok plaintextTokens) {
 	m.configs[cfg.Name] = st
 	m.mu.Unlock()
 
-	go m.proactiveLoop(ctx, st)
+	if m.begin() == nil {
+		go func() { defer m.work.Done(); m.proactiveLoop(ctx, st) }()
+	}
 }
 
 func (m *Manager) lookup(name string) *configState {
@@ -430,10 +472,16 @@ func (m *Manager) proactiveLoop(ctx context.Context, st *configState) {
 		select {
 		case <-ctx.Done():
 			return
-		case <-time.After(wait):
+		case <-m.after(wait):
 		}
 
+		if ctx.Err() != nil {
+			return
+		}
 		_, err := m.doRefresh(st)
+		if errors.Is(err, ErrStopped) {
+			return
+		}
 		if err == nil {
 			continue
 		}
@@ -446,7 +494,7 @@ func (m *Manager) proactiveLoop(ctx context.Context, st *configState) {
 		select {
 		case <-ctx.Done():
 			return
-		case <-time.After(retry):
+		case <-m.after(retry):
 		}
 	}
 }

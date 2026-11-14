@@ -3,18 +3,15 @@
 package cli
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"log"
 	"net"
-	"net/http"
 	"os"
 	"os/signal"
 	"os/user"
 	"strconv"
 	"syscall"
-	"time"
 
 	"filippo.io/age"
 	"github.com/spf13/cobra"
@@ -66,7 +63,7 @@ func init() {
 	rootCmd.AddCommand(credCmd)
 }
 
-func runCredServe(cmd *cobra.Command, _ []string) error {
+func runCredServe(cmd *cobra.Command, _ []string) (result error) {
 	confPath, _ := cmd.Flags().GetString("config")
 	stateDir, _ := cmd.Flags().GetString("state-dir")
 	idPath, _ := cmd.Flags().GetString("identity-file")
@@ -105,25 +102,20 @@ func runCredServe(cmd *cobra.Command, _ []string) error {
 	logger := log.New(os.Stderr, "", 0)
 	mgr := oauth.NewManager(stateDir, ids, conf.RecipientKey(), logger)
 	mgr.SetHTTPClient(credserve.FencedClient(conf.EgressHosts(), nil))
+	defer func() {
+		if err := mgr.Stop(); err != nil {
+			result = err
+		}
+	}()
 	if err := mgr.Start(); err != nil {
 		return err
 	}
-	defer mgr.Stop()
 
-	srv := credserve.NewServer(conf, mgr, uid, logger).HTTPServer()
+	srv := credserve.NewServer(conf, mgr, uid, logger)
 	ctx, stop := signal.NotifyContext(cmd.Context(), syscall.SIGTERM, syscall.SIGINT)
 	defer stop()
-	go func() {
-		<-ctx.Done()
-		shut, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		_ = srv.Shutdown(shut)
-	}()
 	logger.Printf("cred: serving %d instances to uid %d", len(conf.Instances), uid)
-	if err := srv.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
-		return err
-	}
-	return nil
+	return srv.ServeContext(ctx, ln)
 }
 
 func loadCredIdentities(path string, conf *credserve.Config) ([]age.Identity, error) {

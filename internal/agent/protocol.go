@@ -72,6 +72,8 @@ const (
 	ErrCodeOAuthRefreshPermanent = "oauth_refresh_permanent"
 	ErrCodeOAuthRefreshTransient = "oauth_refresh_transient"
 	ErrCodeOAuthBadRequest       = "oauth_bad_request"
+	ErrCodeOAuthStopped          = "oauth_stopped"
+	ErrCodeOAuthDrainUncertain   = "oauth_drain_uncertain"
 )
 
 func errResponse(msg string) []byte {

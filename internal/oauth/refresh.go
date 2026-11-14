@@ -22,6 +22,10 @@ func defaultHTTPClient() *http.Client {
 // updates the in-memory and on-disk state. Concurrent refresh requests for
 // the same config coalesce into a single HTTP call.
 func (m *Manager) doRefresh(st *configState) (string, error) {
+	if err := m.begin(); err != nil {
+		return "", err
+	}
+	defer m.work.Done()
 	st.mu.Lock()
 	if st.flight != nil {
 		existing := st.flight
@@ -52,6 +56,13 @@ func (m *Manager) doRefresh(st *configState) (string, error) {
 	}
 
 	tok, err := m.mint(st, currentRefresh(cur))
+	if err != nil && m.closing() {
+		if !errors.Is(err, ErrStopped) {
+			m.uncertain()
+		}
+		m.finish(op, st, "", ErrStopped)
+		return "", ErrStopped
+	}
 	if errors.Is(err, ErrRefreshPermanent) {
 		// A permanent rejection usually means our refresh token was
 		// rotated away by another process whose success is already on
@@ -67,16 +78,29 @@ func (m *Manager) doRefresh(st *configState) (string, error) {
 		// The predecessor is the only other candidate — try it once.
 		if prev := previousRefresh(cur); prev != "" {
 			m.logger.Printf("oauth: %s refresh rejected; retrying with the previous refresh token", st.cfg.Name)
-			if prevTok, prevErr := m.mint(st, prev); prevErr == nil {
+			prevTok, prevErr := m.mint(st, prev)
+			if prevErr == nil {
 				tok, err = prevTok, nil
+			} else if m.closing() {
+				if !errors.Is(prevErr, ErrStopped) {
+					m.uncertain()
+				}
+				m.finish(op, st, "", ErrStopped)
+				return "", ErrStopped
 			}
 		}
 		if errors.Is(err, ErrRefreshPermanent) {
+			if m.closing() {
+				m.uncertain()
+				m.finish(op, st, "", ErrStopped)
+				return "", ErrStopped
+			}
 			err = m.latchRelogin(st, cur, err)
 		}
 	}
 
 	if err == nil && st.cfg.Grant == GrantChatGPT && cur != nil && tok.Metadata["account_id"] != cur.metadata["account_id"] {
+		m.uncertain()
 		err = m.latchRelogin(st, cur, fmt.Errorf("%w: ChatGPT account changed; sign in again", ErrRefreshPermanent))
 	}
 	if err == nil {
@@ -84,7 +108,7 @@ func (m *Manager) doRefresh(st *configState) (string, error) {
 		// Persist first; only update memory if the write succeeded so a
 		// crash mid-refresh can't lose the new refresh token.
 		if perr := m.saveFile(st.cfg, newTok); perr != nil {
-			err = fmt.Errorf("oauth: persist refreshed tokens: %w", perr)
+			err = ErrDrainUncertain
 		} else {
 			st.tokens.Store(&newTok)
 		}
@@ -107,7 +131,7 @@ func (m *Manager) finish(op *refreshOp, st *configState, result string, err erro
 	close(op.done)
 	st.flight = nil
 	switch {
-	case err != nil && !errors.Is(err, ErrRefreshPermanent):
+	case err != nil && !errors.Is(err, ErrRefreshPermanent) && !errors.Is(err, ErrStopped):
 		st.backoff = nextRefreshBackoff(st.backoff)
 		st.retryAfter = m.now().Add(m.jitter(st.backoff))
 		st.lastErr = err
@@ -143,16 +167,24 @@ func (m *Manager) retryWait(st *configState) time.Duration {
 // mint asks the config's grant for a fresh access token. The manager knows
 // nothing about wire formats; this is the only door to one.
 func (m *Manager) mint(st *configState, durable string) (Tokens, error) {
+	client, err := m.mintClient()
+	if err != nil {
+		return Tokens{}, err
+	}
 	g, err := grantFor(st.cfg)
 	if err != nil {
 		return Tokens{}, err
 	}
-	return g.Mint(m.ctx, m.httpClient, st.cfg, durable)
+	return g.Mint(m.ctx, client, st.cfg, durable)
 }
 
 const reloginReasonMax = 300
 
 func (m *Manager) latchRelogin(st *configState, cur *plaintextTokens, cause error) error {
+	if m.closing() {
+		m.uncertain()
+		return ErrStopped
+	}
 	reason := strings.TrimPrefix(cause.Error(), ErrRefreshPermanent.Error()+": ")
 	if len(reason) > reloginReasonMax {
 		reason = reason[:reloginReasonMax]
@@ -164,7 +196,7 @@ func (m *Manager) latchRelogin(st *configState, cur *plaintextTokens, cause erro
 	next := *cur
 	next.relogin = reason
 	if err := m.saveFile(st.cfg, next); err != nil {
-		m.logger.Printf("oauth: %s: persist relogin mark: %v", st.cfg.Name, err)
+		return ErrDrainUncertain
 	}
 	st.tokens.Store(&next)
 	m.logger.Printf("oauth: %s grant rejected; refusing further refreshes until `%s`", st.cfg.Name, reloginCommand(st.cfg))

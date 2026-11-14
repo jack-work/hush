@@ -40,7 +40,7 @@ func newTestKey(t *testing.T) *age.X25519Identity {
 func newTestManager(t *testing.T, stateDir string, key *age.X25519Identity) *Manager {
 	t.Helper()
 	m := NewManager(stateDir, []age.Identity{key}, key.Recipient(), log.New(os.Stderr, "test: ", 0))
-	t.Cleanup(m.Stop)
+	t.Cleanup(func() { _ = m.Stop() })
 	return m
 }
 

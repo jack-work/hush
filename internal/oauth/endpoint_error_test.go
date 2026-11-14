@@ -33,7 +33,7 @@ func loggedManager(t *testing.T, dir string, key *age.X25519Identity) (*Manager,
 	t.Helper()
 	var buf bytes.Buffer
 	m := NewManager(dir, []age.Identity{key}, key.Recipient(), log.New(&buf, "", 0))
-	t.Cleanup(m.Stop)
+	t.Cleanup(func() { _ = m.Stop() })
 	return m, &buf
 }
 

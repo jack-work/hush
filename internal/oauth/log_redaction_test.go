@@ -30,7 +30,7 @@ func TestATokenEndpointsBodyNeverReachesTheLog(t *testing.T) {
 			dir, key := t.TempDir(), newTestKey(t)
 			var logged bytes.Buffer
 			m := NewManager(dir, []age.Identity{key}, key.Recipient(), log.New(&logged, "", 0))
-			t.Cleanup(m.Stop)
+			t.Cleanup(func() { _ = m.Stop() })
 			if err := m.Register(testCfg, Tokens{AccessToken: "A1", RefreshToken: "R1", ExpiresIn: 3600}); err != nil {
 				t.Fatal(err)
 			}

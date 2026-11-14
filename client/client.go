@@ -74,6 +74,8 @@ var (
 	ErrOAuthRefreshPermanent = &Error{Code: agent.ErrCodeOAuthRefreshPermanent}
 	ErrOAuthRefreshTransient = &Error{Code: agent.ErrCodeOAuthRefreshTransient}
 	ErrOAuthBadRequest       = &Error{Code: agent.ErrCodeOAuthBadRequest}
+	ErrOAuthStopped          = &Error{Code: agent.ErrCodeOAuthStopped}
+	ErrOAuthDrainUncertain   = &Error{Code: agent.ErrCodeOAuthDrainUncertain}
 )
 
 // Decrypt sends encrypted values to the agent and returns plaintext values.

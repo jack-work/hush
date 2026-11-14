@@ -32,8 +32,11 @@ type Server struct {
 	Now                func() time.Time
 	MinRefreshInterval time.Duration
 
-	mu    sync.Mutex
-	cells map[string]*cell
+	mu          sync.Mutex
+	cells       map[string]*cell
+	connMu      sync.Mutex
+	connections sync.WaitGroup
+	conns       map[net.Conn]bool
 }
 
 type cell struct {
@@ -50,6 +53,7 @@ func NewServer(cfg *Config, mgr *oauth.Manager, allowUID uint32, logger *log.Log
 		Now:                time.Now,
 		MinRefreshInterval: DefaultMinRefreshInterval,
 		cells:              map[string]*cell{},
+		conns:              map[net.Conn]bool{},
 	}
 }
 
@@ -59,6 +63,7 @@ func (s *Server) HTTPServer() *http.Server {
 	return &http.Server{
 		Handler:           s,
 		ReadHeaderTimeout: 5 * time.Second,
+		ConnState:         s.connectionState,
 		ConnContext: func(ctx context.Context, c net.Conn) context.Context {
 			uid, err := peerUID(c)
 			if err != nil {
@@ -105,25 +110,25 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if refresh {
 		current, err := s.mgr.Lease(name)
 		if errors.Is(err, oauth.ErrNotFound) {
-			if s.mgr.Adopt(name) != nil {
-				writeStale(w, name)
+			if adoptErr := s.mgr.Adopt(name); adoptErr != nil {
+				writeCredentialFailure(w, name, adoptErr)
 				return
 			}
 			current, err = s.mgr.Lease(name)
 		}
 		if err != nil || (s.cfg.Instances[name].Kind == KindChatGPT && (!oauth.ValidAccountID(current.AccountID) || current.Config != s.cfg.Instances[name].OAuthConfig(name))) {
-			writeStale(w, name)
+			writeCredentialFailure(w, name, err)
 			return
 		}
 		var refreshErr error
 		performed := s.paced(name, func() error { _, refreshErr = s.mgr.Refresh(name); return refreshErr })
 		if refreshErr != nil {
-			writeStale(w, name)
+			writeCredentialFailure(w, name, refreshErr)
 			return
 		}
 		l, err := s.mgr.Lease(name)
 		if err != nil || l.SignInNeeded || l.ExpiresAt.Sub(s.Now()) < serveFloor {
-			writeStale(w, name)
+			writeCredentialFailure(w, name, err)
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
@@ -136,6 +141,10 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) answer(w http.ResponseWriter, name string) {
 	lease, err := s.mgr.Lease(name)
+	if errors.Is(err, oauth.ErrStopped) || errors.Is(err, oauth.ErrDrainUncertain) {
+		writeCredentialFailure(w, name, err)
+		return
+	}
 	if err == nil && s.cfg.Instances[name].Kind == KindChatGPT && (!oauth.ValidAccountID(lease.AccountID) || lease.Config != s.cfg.Instances[name].OAuthConfig(name)) {
 		writeStale(w, name)
 		return
@@ -155,7 +164,7 @@ func (s *Server) answer(w http.ResponseWriter, name string) {
 
 	lease, err = s.mgr.Lease(name)
 	if err != nil || lease.SignInNeeded {
-		writeStale(w, name)
+		writeCredentialFailure(w, name, err)
 		return
 	}
 	if lease.ExpiresAt.Sub(s.Now()) < serveFloor {
@@ -227,4 +236,15 @@ func writeError(w http.ResponseWriter, status int, code, reason string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(map[string]string{"error": code, "reason": reason})
+}
+
+func writeCredentialFailure(w http.ResponseWriter, name string, err error) {
+	switch {
+	case errors.Is(err, oauth.ErrStopped):
+		writeError(w, http.StatusServiceUnavailable, "manager_stopped", "service stopping")
+	case errors.Is(err, oauth.ErrDrainUncertain):
+		writeError(w, http.StatusServiceUnavailable, "credential_uncertain", "credential state unresolved")
+	default:
+		writeStale(w, name)
+	}
 }

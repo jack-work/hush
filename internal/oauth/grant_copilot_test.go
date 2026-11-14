@@ -26,7 +26,7 @@ func newGrantManager(t *testing.T) *Manager {
 		t.Fatal(err)
 	}
 	m := NewManager(t.TempDir(), []age.Identity{id}, id.Recipient(), testLogger())
-	t.Cleanup(m.Stop)
+	t.Cleanup(func() { _ = m.Stop() })
 	return m
 }
 

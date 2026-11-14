@@ -35,7 +35,7 @@ type Login struct {
 	Listen   func(string, string) (net.Listener, error)
 }
 
-func (l *Login) Run(ctx context.Context) error {
+func (l *Login) Run(ctx context.Context) (result error) {
 	in, ok := l.Config.Instances[l.Name]
 	if !ok {
 		return fmt.Errorf("no instance %q in the cred config", l.Name)
@@ -63,8 +63,15 @@ func (l *Login) Run(ctx context.Context) error {
 
 	mgr := oauth.NewManager(l.StateDir, nil, l.Config.RecipientKey(), discardLogger())
 	mgr.SetHTTPClient(l.Client)
-	defer mgr.Stop()
+	defer func() {
+		if err := mgr.Stop(); err != nil {
+			result = err
+		}
+	}()
 	if err := mgr.Register(in.OAuthConfig(l.Name), tok); err != nil {
+		return err
+	}
+	if err := mgr.Stop(); err != nil {
 		return err
 	}
 	fmt.Fprintf(l.Out, "signed in %s; hush cred serve picks it up on its next request for it\n", l.Name)

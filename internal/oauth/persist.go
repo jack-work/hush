@@ -107,7 +107,12 @@ func (m *Manager) loadFile(path string) (Config, plaintextTokens, bool, error) {
 
 // saveFile writes an OAuth config and its (plaintext) tokens to disk
 // atomically (temp file + rename).
-func (m *Manager) saveFile(cfg Config, tok plaintextTokens) error {
+func (m *Manager) saveFile(cfg Config, tok plaintextTokens) (err error) {
+	defer func() {
+		if err != nil {
+			m.uncertain()
+		}
+	}()
 	encAccess, err := secrets.EncryptValue(tok.access, m.recipient)
 	if err != nil {
 		return fmt.Errorf("encrypt access_token: %w", err)
@@ -160,7 +165,7 @@ func (m *Manager) saveFile(cfg Config, tok plaintextTokens) error {
 	}
 	tmpPath := f.Name()
 	if _, err = f.Write(buf.Bytes()); err == nil {
-		err = f.Sync()
+		err = m.syncFile(f)
 	}
 	closeErr := f.Close()
 	if err == nil {
@@ -170,7 +175,7 @@ func (m *Manager) saveFile(cfg Config, tok plaintextTokens) error {
 		os.Remove(tmpPath)
 		return err
 	}
-	if err := os.Rename(tmpPath, finalPath); err != nil {
+	if err := m.renameFile(tmpPath, finalPath); err != nil {
 		os.Remove(tmpPath)
 		return err
 	}
@@ -179,5 +184,5 @@ func (m *Manager) saveFile(cfg Config, tok plaintextTokens) error {
 		return err
 	}
 	defer d.Close()
-	return d.Sync()
+	return m.syncDirectory(d)
 }

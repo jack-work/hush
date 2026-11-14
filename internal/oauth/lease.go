@@ -15,6 +15,10 @@ type Lease struct {
 }
 
 func (m *Manager) Lease(name string) (Lease, error) {
+	if err := m.begin(); err != nil {
+		return Lease{}, err
+	}
+	defer m.work.Done()
 	st := m.lookup(name)
 	if st == nil {
 		return Lease{}, ErrNotFound
@@ -34,6 +38,10 @@ func (m *Manager) Lease(name string) (Lease, error) {
 }
 
 func (m *Manager) Adopt(name string) error {
+	if err := m.begin(); err != nil {
+		return err
+	}
+	defer m.work.Done()
 	cfg, tok, _, err := m.loadFile(m.filePath(name))
 	if err != nil {
 		return err
@@ -42,6 +50,12 @@ func (m *Manager) Adopt(name string) error {
 	return nil
 }
 
-func (m *Manager) SetHTTPClient(c *http.Client) {
+func (m *Manager) SetHTTPClient(c *http.Client) error {
+	m.lifeMu.Lock()
+	defer m.lifeMu.Unlock()
+	if m.stopping {
+		return ErrStopped
+	}
 	m.httpClient = c
+	return nil
 }

@@ -70,8 +70,12 @@ func New(id *identity.DecryptedIdentity, ttl time.Duration, runtimeDir, stateDir
 // Run starts the agent: takes the single-instance lock, listens on the
 // socket, and blocks until TTL expires or a signal is received. The
 // identity is zeroed on exit.
-func (a *Agent) Run() error {
-	defer a.shutdown()
+func (a *Agent) Run() (result error) {
+	defer func() {
+		if err := a.shutdown(); err != nil {
+			result = err
+		}
+	}()
 
 	if err := os.MkdirAll(a.runtimeDir, 0700); err != nil {
 		return fmt.Errorf("create runtime dir: %w", err)
@@ -301,7 +305,11 @@ func (a *Agent) handleOAuthRegister(req Request) []byte {
 		ExpiresIn:    o.ExpiresIn,
 	})
 	if err != nil {
-		return errResponseCoded(err.Error(), ErrCodeOAuthBadRequest)
+		code := ErrCodeOAuthBadRequest
+		if errors.Is(err, oauth.ErrStopped) || errors.Is(err, oauth.ErrDrainUncertain) {
+			code = oauthErrCode(err)
+		}
+		return errResponseCoded(err.Error(), code)
 	}
 	return okResponse(Response{})
 }
@@ -342,7 +350,7 @@ func (a *Agent) handleOAuthDelete(req Request) []byte {
 		return errResponseCoded("oauth: name required", ErrCodeOAuthBadRequest)
 	}
 	if err := a.oauth.Delete(req.OAuth.Name); err != nil {
-		return errResponse(err.Error())
+		return errResponseCoded(err.Error(), oauthErrCode(err))
 	}
 	return okResponse(Response{})
 }
@@ -351,11 +359,19 @@ func (a *Agent) handleOAuthList() []byte {
 	if a.oauth == nil {
 		return errResponse("oauth: no X25519 identity available")
 	}
-	return okResponse(Response{Names: a.oauth.List()})
+	names, err := a.oauth.List()
+	if err != nil {
+		return errResponseCoded(err.Error(), oauthErrCode(err))
+	}
+	return okResponse(Response{Names: names})
 }
 
 func oauthErrCode(err error) string {
 	switch {
+	case errors.Is(err, oauth.ErrStopped):
+		return ErrCodeOAuthStopped
+	case errors.Is(err, oauth.ErrDrainUncertain):
+		return ErrCodeOAuthDrainUncertain
 	case errors.Is(err, oauth.ErrNotFound):
 		return ErrCodeOAuthNotFound
 	case errors.Is(err, oauth.ErrRefreshPermanent):
@@ -404,9 +420,10 @@ func (a *Agent) handleShutdown() []byte {
 	return okResponse(Response{})
 }
 
-func (a *Agent) shutdown() {
+func (a *Agent) shutdown() error {
+	var drainErr error
 	if a.oauth != nil {
-		a.oauth.Stop()
+		drainErr = a.oauth.Stop()
 	}
 	a.log.Printf("zeroing identity")
 	a.id.Zero()
@@ -444,7 +461,12 @@ func (a *Agent) shutdown() {
 		a.lock.Release()
 		a.lock = nil
 	}
-	a.log.Printf("agent stopped")
+	if drainErr != nil {
+		a.log.Printf("agent stopped with unresolved credential state")
+	} else {
+		a.log.Printf("agent stopped")
+	}
+	return drainErr
 }
 
 func (a *Agent) sockPath() string {

@@ -18,6 +18,7 @@ import (
 
 	"filippo.io/age"
 	"github.com/spf13/cobra"
+	"golang.org/x/term"
 
 	"github.com/jack-work/hush/internal/agent"
 	"github.com/jack-work/hush/internal/credserve"
@@ -46,12 +47,22 @@ var credServeCmd = &cobra.Command{
 	RunE:  runCredServe,
 }
 
+var credLoginCmd = &cobra.Command{
+	Use:   "login <name>",
+	Short: "Sign an instance in; the code is read from the terminal, never argv",
+	Args:  cobra.ExactArgs(1),
+	RunE:  runCredLogin,
+}
+
 func init() {
-	credServeCmd.Flags().String("config", "/etc/hush-cred/config.toml", "instances, recipient and allowed user")
-	credServeCmd.Flags().String("state-dir", "/var/lib/hush-cred", "where the encrypted token files live")
+	for _, c := range []*cobra.Command{credServeCmd, credLoginCmd} {
+		c.Flags().String("config", "/etc/hush-cred/config.toml", "instances, recipient and allowed user")
+		c.Flags().String("state-dir", "/var/lib/hush-cred", "where the encrypted token files live")
+	}
 	credServeCmd.Flags().String("identity-file", "", "age identity file (default $"+credIdentityEnv+")")
 	credServeCmd.Flags().String("socket", "", "bind this path when not socket-activated")
-	credCmd.AddCommand(credServeCmd)
+	credLoginCmd.Flags().Bool("replace", false, "sign in again over a live credential (stop the server first)")
+	credCmd.AddCommand(credServeCmd, credLoginCmd)
 	rootCmd.AddCommand(credCmd)
 }
 
@@ -156,4 +167,44 @@ func credListener(path string) (net.Listener, error) {
 	ln, err = net.Listen("unix", path)
 	syscall.Umask(old)
 	return ln, err
+}
+
+var credReadCode func(prompt string) (string, error)
+
+func runCredLogin(cmd *cobra.Command, args []string) error {
+	confPath, _ := cmd.Flags().GetString("config")
+	stateDir, _ := cmd.Flags().GetString("state-dir")
+	replace, _ := cmd.Flags().GetBool("replace")
+
+	conf, err := credserve.LoadConfig(confPath)
+	if err != nil {
+		return err
+	}
+	read := credReadCode
+	if read == nil {
+		if !term.IsTerminal(int(os.Stdin.Fd())) {
+			return errors.New("stdin is not a terminal: the code is read from a terminal only")
+		}
+		read = readCodeFromTerminal
+	}
+	l := &credserve.Login{
+		Config:   conf,
+		StateDir: stateDir,
+		Name:     args[0],
+		Replace:  replace,
+		Client:   credserve.FencedClient(conf.EgressHosts(), nil),
+		ReadCode: read,
+		Out:      cmd.ErrOrStderr(),
+	}
+	return l.Run(cmd.Context())
+}
+
+func readCodeFromTerminal(prompt string) (string, error) {
+	fmt.Fprint(os.Stderr, prompt)
+	b, err := term.ReadPassword(int(os.Stdin.Fd()))
+	fmt.Fprintln(os.Stderr)
+	if err != nil {
+		return "", fmt.Errorf("read code: %w", err)
+	}
+	return string(b), nil
 }

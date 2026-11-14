@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -31,6 +32,7 @@ type Login struct {
 	Client   *http.Client
 	ReadCode func(prompt string) (string, error)
 	Out      io.Writer
+	Listen   func(string, string) (net.Listener, error)
 }
 
 func (l *Login) Run(ctx context.Context) error {
@@ -52,6 +54,8 @@ func (l *Login) Run(ctx context.Context) error {
 		tok, err = l.anthropic(ctx, in)
 	case KindCopilot:
 		tok, err = l.copilot(ctx, in)
+	case KindChatGPT:
+		tok, err = l.chatGPT(ctx, in)
 	}
 	if err != nil {
 		return err

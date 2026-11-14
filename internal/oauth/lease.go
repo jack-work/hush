@@ -6,7 +6,9 @@ import (
 )
 
 type Lease struct {
+	Config       Config
 	AccessToken  string
+	AccountID    string
 	ExpiresAt    time.Time
 	RefreshAt    time.Time
 	SignInNeeded bool
@@ -22,7 +24,9 @@ func (m *Manager) Lease(name string) (Lease, error) {
 		return Lease{}, ErrNotFound
 	}
 	return Lease{
+		Config:       st.cfg,
 		AccessToken:  p.access,
+		AccountID:    p.metadata["account_id"],
 		ExpiresAt:    p.expiresAt,
 		RefreshAt:    p.refreshAt(m.now()),
 		SignInNeeded: p.relogin != "",

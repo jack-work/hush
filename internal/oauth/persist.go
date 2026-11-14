@@ -154,13 +154,30 @@ func (m *Manager) saveFile(cfg Config, tok plaintextTokens) error {
 	}
 
 	finalPath := m.filePath(cfg.Name)
-	tmpPath := finalPath + ".tmp"
-	if err := os.WriteFile(tmpPath, buf.Bytes(), 0600); err != nil {
+	f, err := os.CreateTemp(dir, ".credential-*")
+	if err != nil {
+		return err
+	}
+	tmpPath := f.Name()
+	if _, err = f.Write(buf.Bytes()); err == nil {
+		err = f.Sync()
+	}
+	closeErr := f.Close()
+	if err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		os.Remove(tmpPath)
 		return err
 	}
 	if err := os.Rename(tmpPath, finalPath); err != nil {
 		os.Remove(tmpPath)
 		return err
 	}
-	return nil
+	d, err := os.Open(dir)
+	if err != nil {
+		return err
+	}
+	defer d.Close()
+	return d.Sync()
 }

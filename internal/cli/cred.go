@@ -91,6 +91,11 @@ func runCredServe(cmd *cobra.Command, _ []string) error {
 		return err
 	}
 
+	owner, err := credserve.LockState(stateDir)
+	if err != nil {
+		return err
+	}
+	defer owner.Close()
 	ln, err := credListener(sockPath)
 	if err != nil {
 		return err
@@ -180,8 +185,13 @@ func runCredLogin(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
+	owner, err := credserve.LockState(stateDir)
+	if err != nil {
+		return err
+	}
+	defer owner.Close()
 	read := credReadCode
-	if read == nil {
+	if read == nil && conf.Instances[args[0]].Kind != credserve.KindChatGPT {
 		if !term.IsTerminal(int(os.Stdin.Fd())) {
 			return errors.New("stdin is not a terminal: the code is read from a terminal only")
 		}

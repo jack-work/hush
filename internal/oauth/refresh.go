@@ -76,6 +76,9 @@ func (m *Manager) doRefresh(st *configState) (string, error) {
 		}
 	}
 
+	if err == nil && st.cfg.Grant == GrantChatGPT && cur != nil && tok.Metadata["account_id"] != cur.metadata["account_id"] {
+		err = m.latchRelogin(st, cur, fmt.Errorf("%w: ChatGPT account changed; sign in again", ErrRefreshPermanent))
+	}
 	if err == nil {
 		newTok := newTokenState(tok, currentRefresh(cur), time.Now())
 		// Persist first; only update memory if the write succeeded so a
@@ -173,6 +176,9 @@ func reloginError(cfg Config, reason string) error {
 }
 
 func reloginCommand(cfg Config) string {
+	if cfg.Grant == GrantChatGPT {
+		return "hush cred login " + cfg.Name
+	}
 	if cfg.Grant == "" || cfg.Grant == GrantRefreshToken {
 		return "hush oauth login " + cfg.Name
 	}

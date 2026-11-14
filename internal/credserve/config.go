@@ -21,6 +21,7 @@ import (
 const (
 	KindAnthropic = "anthropic"
 	KindCopilot   = "copilot"
+	KindChatGPT   = "chatgpt"
 )
 
 type Instance struct {
@@ -75,6 +76,10 @@ func ParseConfig(data []byte) (*Config, error) {
 		return nil, errors.New("cred config: no instances")
 	}
 	for name, in := range c.Instances {
+		if in.Kind == KindChatGPT {
+			in = in.chatGPTDefaults()
+			c.Instances[name] = in
+		}
 		if err := in.validate(name); err != nil {
 			return nil, err
 		}
@@ -90,6 +95,12 @@ func (in Instance) validate(name string) error {
 	}
 	fail := func(format string, a ...any) error {
 		return fmt.Errorf("cred config: instance %s: "+format, append([]any{name}, a...)...)
+	}
+	if in.Kind == KindChatGPT {
+		if in.AuthorizeURL != oauth.ChatGPTAuthorizeURL || in.TokenURL != oauth.ChatGPTTokenURL || in.ClientID != oauth.ChatGPTClientID || in.RedirectURI != oauth.ChatGPTRedirectURI || in.Scopes != oauth.ChatGPTScopes || in.DeviceURL != "" || in.GitHubTokenURL != "" {
+			return fail("ChatGPT endpoints, client and callback are pinned")
+		}
+		return nil
 	}
 	if in.ClientID == "" {
 		return fail("client_id is required")
@@ -147,6 +158,10 @@ func (in Instance) OAuthConfig(name string) oauth.Config {
 		c.Grant = oauth.GrantRefreshToken
 	case KindCopilot:
 		c.Grant = oauth.GrantCopilot
+	case KindChatGPT:
+		c.AuthorizeURL = in.AuthorizeURL
+		c.RedirectURI = in.RedirectURI
+		c.Grant = oauth.GrantChatGPT
 	}
 	return c
 }
@@ -183,4 +198,23 @@ func hostPort(u *url.URL) string {
 		port = "443"
 	}
 	return strings.ToLower(u.Hostname()) + ":" + port
+}
+
+func (in Instance) chatGPTDefaults() Instance {
+	if in.AuthorizeURL == "" {
+		in.AuthorizeURL = oauth.ChatGPTAuthorizeURL
+	}
+	if in.TokenURL == "" {
+		in.TokenURL = oauth.ChatGPTTokenURL
+	}
+	if in.ClientID == "" {
+		in.ClientID = oauth.ChatGPTClientID
+	}
+	if in.RedirectURI == "" {
+		in.RedirectURI = oauth.ChatGPTRedirectURI
+	}
+	if in.Scopes == "" {
+		in.Scopes = oauth.ChatGPTScopes
+	}
+	return in
 }

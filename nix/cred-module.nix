@@ -11,9 +11,9 @@ let
 
   instanceType = types.submodule {
     options = {
-      kind = mkOption { type = types.enum [ "anthropic" "copilot" ]; };
-      clientId = mkOption { type = types.str; };
-      tokenUrl = mkOption { type = types.str; };
+      kind = mkOption { type = types.enum [ "anthropic" "copilot" "chatgpt" ]; };
+      clientId = mkOption { type = types.str; default = ""; };
+      tokenUrl = mkOption { type = types.str; default = ""; };
       scopes = mkOption { type = types.str; default = ""; };
       authorizeUrl = mkOption { type = types.nullOr types.str; default = null; };
       redirectUri = mkOption { type = types.nullOr types.str; default = null; };
@@ -39,7 +39,7 @@ let
     instances = lib.mapAttrs (_: instanceToml) cfg.instances;
   };
 
-  egressUrls = lib.concatMap (i: lib.filter (u: u != null) [ i.tokenUrl i.deviceUrl i.githubTokenUrl ])
+  egressUrls = lib.concatMap (i: if i.kind == "chatgpt" then [ "https://auth.openai.com/oauth/token" ] else lib.filter (u: u != null) [ i.tokenUrl i.deviceUrl i.githubTokenUrl ])
     (lib.attrValues cfg.instances);
   hostOf = u: let m = builtins.match "https://([a-zA-Z0-9.-]+)(/.*)?" u; in if m == null then null else lib.head m;
   egressHosts = lib.unique (lib.filter (h: h != null) (map hostOf egressUrls));

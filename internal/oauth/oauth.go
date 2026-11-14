@@ -120,7 +120,7 @@ func newTokenState(tok Tokens, prevRefresh string, now time.Time) plaintextToken
 	return plaintextTokens{
 		access:      tok.AccessToken,
 		refresh:     tok.RefreshToken,
-		metadata:    tok.Metadata,
+		metadata:    cloneMeta(tok.Metadata),
 		prevRefresh: prevRefresh,
 		issuedAt:    now,
 		expiresAt:   now.Add(lifetime),

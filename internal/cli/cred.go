@@ -185,11 +185,6 @@ func runCredLogin(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
-	owner, err := credserve.LockState(stateDir)
-	if err != nil {
-		return err
-	}
-	defer owner.Close()
 	read := credReadCode
 	if read == nil && conf.Instances[args[0]].Kind != credserve.KindChatGPT {
 		if !term.IsTerminal(int(os.Stdin.Fd())) {
@@ -197,6 +192,11 @@ func runCredLogin(cmd *cobra.Command, args []string) error {
 		}
 		read = readCodeFromTerminal
 	}
+	owner, err := credserve.LockState(stateDir)
+	if err != nil {
+		return err
+	}
+	defer owner.Close()
 	l := &credserve.Login{
 		Config:   conf,
 		StateDir: stateDir,

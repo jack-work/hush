@@ -175,6 +175,9 @@ func TestChatGPTConfigPinsEveryEndpoint(t *testing.T) {
 
 func TestCredentialStateHasOneOwner(t *testing.T) {
 	dir := t.TempDir()
+	if err := os.Chmod(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
 	first, err := LockState(dir)
 	if err != nil {
 		t.Fatal(err)
@@ -245,6 +248,9 @@ func TestCredentialOwnerProcessCrashReleasesLock(t *testing.T) {
 		os.Exit(0)
 	}
 	dir := t.TempDir()
+	if err := os.Chmod(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
 	cmd := exec.Command(os.Args[0], "-test.run=^TestCredentialOwnerProcessCrashReleasesLock$")
 	cmd.Env = append(os.Environ(), "HUSH_TEST_OWNER_DIR="+dir)
 	input, err := cmd.StdinPipe()

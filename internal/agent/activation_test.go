@@ -138,7 +138,7 @@ func TestInheritedListener(t *testing.T) {
 	t.Run("no activation env", func(t *testing.T) {
 		t.Setenv("LISTEN_PID", "")
 		t.Setenv("LISTEN_FDS", "")
-		ln, err := inheritedListener()
+		ln, err := InheritedListener()
 		if ln != nil || err != nil {
 			t.Fatalf("got (%v, %v), want (nil, nil)", ln, err)
 		}
@@ -146,7 +146,7 @@ func TestInheritedListener(t *testing.T) {
 
 	t.Run("zero descriptors", func(t *testing.T) {
 		activationEnv(t, 0, os.Getpid(), "0")
-		ln, err := inheritedListener()
+		ln, err := InheritedListener()
 		if ln != nil || err != nil {
 			t.Fatalf("got (%v, %v), want (nil, nil)", ln, err)
 		}
@@ -154,14 +154,14 @@ func TestInheritedListener(t *testing.T) {
 
 	t.Run("more than one descriptor", func(t *testing.T) {
 		activationEnv(t, 0, os.Getpid(), "2")
-		if _, err := inheritedListener(); err == nil {
+		if _, err := InheritedListener(); err == nil {
 			t.Fatal("expected a loud failure for an unexpected descriptor count")
 		}
 	})
 
 	t.Run("unparseable count", func(t *testing.T) {
 		activationEnv(t, 0, os.Getpid(), "many")
-		if _, err := inheritedListener(); err == nil {
+		if _, err := InheritedListener(); err == nil {
 			t.Fatal("expected a loud failure for a non-numeric LISTEN_FDS")
 		}
 	})

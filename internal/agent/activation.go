@@ -18,7 +18,7 @@ import (
 // there). Nothing outside tests writes it.
 var listenFdsStart = 3
 
-// inheritedListener returns the listening socket handed to this process by
+// InheritedListener returns the listening socket handed to this process by
 // the service manager, or (nil, nil) when there is none — meaning "bind it
 // yourself", the path `hush up -d` has always taken.
 //
@@ -36,7 +36,7 @@ var listenFdsStart = 3
 // When the claim is ours the variables are unset, again per the protocol:
 // the agent re-execs nothing today, but a leaked LISTEN_PID that happens
 // to match a future child's pid is the kind of bug that takes a week.
-func inheritedListener() (net.Listener, error) {
+func InheritedListener() (net.Listener, error) {
 	pidStr, fdsStr := os.Getenv("LISTEN_PID"), os.Getenv("LISTEN_FDS")
 	if pidStr == "" || fdsStr == "" {
 		return nil, nil

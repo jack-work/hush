@@ -85,7 +85,7 @@ func (a *Agent) Run() error {
 	// and handed us the descriptor, adopt it. Clients that triggered the
 	// start are waiting in its backlog and see one connection, not a
 	// refusal followed by a retry.
-	ln, err := inheritedListener()
+	ln, err := InheritedListener()
 	if err != nil {
 		return err
 	}

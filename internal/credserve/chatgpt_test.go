@@ -68,12 +68,13 @@ func TestChatGPTLoopbackPKCEAndAtomicMinterTuple(t *testing.T) {
 			out := loginOutput{url: make(chan string, 1)}
 			l.Out = out
 			var exchange url.Values
+			access := fakeChatGPTJWT("account_1")
 			posts := 0
 			tokenServer := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 				posts++
 				req.ParseForm()
 				exchange = req.Form
-				json.NewEncoder(w).Encode(map[string]any{"access_token": fakeChatGPTJWT("account_1"), "refresh_token": "REFRESH_NEVER_PUBLISH", "expires_in": 3600})
+				json.NewEncoder(w).Encode(map[string]any{"access_token": access, "refresh_token": "REFRESH_NEVER_PUBLISH", "expires_in": 3600})
 			}))
 			defer tokenServer.Close()
 			target, _ := url.Parse(tokenServer.URL)
@@ -161,7 +162,7 @@ func TestChatGPTLoopbackPKCEAndAtomicMinterTuple(t *testing.T) {
 			a := r.get(instName)
 			var doc map[string]any
 			json.Unmarshal([]byte(a.raw), &doc)
-			if a.status != 200 || doc["account_id"] != "account_1" || doc["token"] != fakeChatGPTJWT("account_1") || strings.Contains(a.raw, "REFRESH_NEVER_PUBLISH") || strings.Contains(a.raw, "id_token") {
+			if a.status != 200 || doc["account_id"] != "account_1" || doc["token"] != access || strings.Contains(a.raw, "REFRESH_NEVER_PUBLISH") || strings.Contains(a.raw, "id_token") {
 				t.Fatalf("minter tuple status%d", a.status)
 			}
 		})

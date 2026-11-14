@@ -118,6 +118,15 @@
 
       nixosModules.hush-agent = self.nixosModules.default;
 
+      nixosModules.hush-cred = import ./nix/cred-module.nix self;
+
+      checks.x86_64-linux = let
+        pkgs = nixpkgs.legacyPackages.x86_64-linux;
+      in {
+        cred-vm = import ./nix/cred-test.nix { inherit pkgs self; };
+        cred-no-container = import ./nix/cred-no-container.nix { inherit pkgs self nixpkgs; };
+      };
+
       devShells = forAllSystems ({ pkgs }: let
         hushPkg = self.packages.${pkgs.system}.default;
 

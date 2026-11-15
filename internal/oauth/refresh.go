@@ -21,26 +21,51 @@ func defaultHTTPClient() *http.Client {
 // doRefresh performs (or joins) a refresh for one config and atomically
 // updates the in-memory and on-disk state. Concurrent refresh requests for
 // the same config coalesce into a single HTTP call.
-func (m *Manager) doRefresh(st *configState) (string, error) {
+func (m *Manager) doRefresh(st *configState) (string, error) { return m.refreshState(st, true) }
+
+func (m *Manager) TryRefresh(name string) (string, error) {
+	st := m.lookup(name)
+	if st == nil {
+		return "", ErrNotFound
+	}
+	return m.refreshState(st, false)
+}
+
+func (m *Manager) refreshState(st *configState, join bool) (string, error) {
 	if err := m.begin(); err != nil {
 		return "", err
 	}
 	defer m.work.Done()
+	m.loginMu.Lock()
+	if m.logins[st.cfg.Name] {
+		m.loginMu.Unlock()
+		return "", ErrOperationBusy
+	}
+	if m.lookup(st.cfg.Name) != st {
+		m.loginMu.Unlock()
+		return "", ErrStopped
+	}
 	st.mu.Lock()
 	if st.flight != nil {
 		existing := st.flight
 		st.mu.Unlock()
+		m.loginMu.Unlock()
+		if !join {
+			return "", ErrOperationBusy
+		}
 		<-existing.done
 		return existing.result, existing.err
 	}
 	if wait := st.retryAfter.Sub(m.now()); wait > 0 {
 		err := fmt.Errorf("%w (next attempt in %s)", st.lastErr, wait.Round(time.Second))
 		st.mu.Unlock()
+		m.loginMu.Unlock()
 		return "", err
 	}
 	op := &refreshOp{done: make(chan struct{})}
 	st.flight = op
 	st.mu.Unlock()
+	m.loginMu.Unlock()
 
 	cur := st.tokens.Load()
 	if cur != nil && cur.relogin != "" {

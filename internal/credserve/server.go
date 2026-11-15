@@ -34,6 +34,7 @@ type Server struct {
 
 	mu          sync.Mutex
 	cells       map[string]*cell
+	pending     map[string]*remoteLogin
 	connMu      sync.Mutex
 	connections sync.WaitGroup
 	conns       map[net.Conn]bool
@@ -89,6 +90,9 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusForbidden, "forbidden", "peer not allowed")
 		return
 	}
+	if s.loginRoute(w, r) {
+		return
+	}
 	refresh := strings.HasPrefix(r.URL.Path, "/refresh/")
 	prefix := "/cred/"
 	if refresh {
@@ -108,6 +112,16 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if refresh {
+		if r.URL.RawQuery != "" || !controlBody(r, &struct{}{}, true) {
+			writeError(w, 400, "invalid_request", "invalid request")
+			return
+		}
+		finish, performed, err := s.beginRemoteRefresh(name)
+		if err != nil {
+			writeOperationError(w, name, err)
+			return
+		}
+		defer finish()
 		current, err := s.mgr.Lease(name)
 		if errors.Is(err, oauth.ErrNotFound) {
 			if adoptErr := s.mgr.Adopt(name); adoptErr != nil {
@@ -121,9 +135,11 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		var refreshErr error
-		performed := s.paced(name, func() error { _, refreshErr = s.mgr.Refresh(name); return refreshErr })
+		if performed {
+			_, refreshErr = s.mgr.TryRefresh(name)
+		}
 		if refreshErr != nil {
-			writeCredentialFailure(w, name, refreshErr)
+			writeOperationError(w, name, refreshErr)
 			return
 		}
 		l, err := s.mgr.Lease(name)

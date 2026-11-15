@@ -193,6 +193,8 @@ type Manager struct {
 
 	mu      sync.RWMutex
 	configs map[string]*configState
+	loginMu sync.Mutex
+	logins  map[string]bool
 
 	ctx    context.Context
 	cancel context.CancelFunc

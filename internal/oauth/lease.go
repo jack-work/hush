@@ -42,6 +42,11 @@ func (m *Manager) Adopt(name string) error {
 		return err
 	}
 	defer m.work.Done()
+	m.loginMu.Lock()
+	defer m.loginMu.Unlock()
+	if m.logins[name] {
+		return ErrOperationBusy
+	}
 	cfg, tok, _, err := m.loadFile(m.filePath(name))
 	if err != nil {
 		return err

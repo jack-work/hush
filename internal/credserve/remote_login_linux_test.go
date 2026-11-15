@@ -73,6 +73,9 @@ func TestRemoteLoginKeepsOldChainUntilSuccessfulCompletion(t *testing.T) {
 	if _, err := r.mgr.TryRefresh(instName); err != oauth.ErrOperationBusy {
 		t.Fatal("manager refresh bypassed login reservation")
 	}
+	if err := r.mgr.Adopt(instName); err != oauth.ErrOperationBusy {
+		t.Fatal("disk adoption bypassed login reservation")
+	}
 	if status, _ = post("login-start", map[string]any{}); status != 409 {
 		t.Fatal("second login overlapped")
 	}

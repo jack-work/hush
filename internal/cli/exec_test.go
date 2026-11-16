@@ -117,9 +117,18 @@ func TestEnvDeliveryRejectsLeftoverSecretTemplate(t *testing.T) {
 	}
 }
 
+func echoBin(t *testing.T) string {
+	t.Helper()
+	p, err := exec.LookPath("echo")
+	if err != nil {
+		t.Fatalf("locate echo: %v", err)
+	}
+	return p
+}
+
 func TestScriptlessExecRunsBinaryWithNoShell(t *testing.T) {
 	spec := &Spec{
-		Exec:     "/bin/echo",
+		Exec:     echoBin(t),
 		Delivery: DeliveryEnv,
 		Args:     []string{"fixed"},
 	}
@@ -141,7 +150,7 @@ func TestScriptlessExecRunsBinaryWithNoShell(t *testing.T) {
 // interpreter to inject into. The payload must arrive as one inert argv
 // element.
 func TestScriptlessExecIsInjectionProof(t *testing.T) {
-	spec := &Spec{Exec: "/bin/echo", Delivery: DeliveryEnv}
+	spec := &Spec{Exec: echoBin(t), Delivery: DeliveryEnv}
 	payloads := []string{"$(echo PWNED)", "`echo PWNED`", "; echo PWNED"}
 	cmd, cleanup, err := buildChild(spec, "echo", "", "", nil, payloads, nil)
 	defer cleanup()

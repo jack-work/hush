@@ -21,9 +21,13 @@ let
         os.execvp("runuser", ["runuser", "-u", "hush-cred", "--", "hush-cred", "login", "anthropic-work"])
     buf = b""
     while b"code#state: " not in buf:
-        chunk = os.read(fd, 4096)
+        try:
+            chunk = os.read(fd, 4096)
+        except OSError:  # Linux: EIO once the child side closes; that is EOF
+            chunk = b""
         if not chunk:
-            sys.stdout.write(buf.decode(errors="replace"))
+            _, st = os.waitpid(pid, 0)
+            sys.stdout.write(buf.decode(errors="replace") + f"\n[login exited before the prompt: status {os.waitstatus_to_exitcode(st)}]\n")
             sys.exit(2)
         buf += chunk
     state = re.search(rb"state=([A-Za-z0-9_-]+)", buf).group(1).decode()
@@ -173,7 +177,10 @@ pkgs.testers.runNixOSTest {
 
     with subtest("(v) login reads code#state from the terminal"):
         fake("login_expires_in", 35)
+        # login refuses while `cred serve` owns the state (.credential-owner.lock): stop the owner first, as an operator would.
+        minter.succeed("systemctl stop hush-cred.socket hush-cred.service")
         print(minter.succeed("${pkgs.python3}/bin/python3 ${ptyLogin}"))
+        minter.succeed("systemctl start hush-cred.socket")
         assert count("logins") == 1
         status, doc = cred("rou2", 200)
         assert doc["token"] == "at-login-1", doc

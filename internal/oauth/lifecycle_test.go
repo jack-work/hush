@@ -82,12 +82,16 @@ func assertStoppedAPIs(t *testing.T, m *Manager) {
 		"register": func() error {
 			return m.Register(testCfg, Tokens{AccessToken: "FAKE_POST_STOP", RefreshToken: "FAKE_POST_STOP", ExpiresIn: 3600})
 		},
-		"adopt":        func() error { return m.Adopt(testCfg.Name) },
-		"delete":       func() error { return m.Delete(testCfg.Name) },
-		"refresh":      func() error { _, err := m.Refresh(testCfg.Name); return err },
-		"get":          func() error { _, err := m.Get(testCfg.Name); return err },
-		"lease":        func() error { _, err := m.Lease(testCfg.Name); return err },
-		"full refresh": func() error { _, _, err := m.RefreshFull(testCfg.Name); return err },
+		"adopt":               func() error { return m.Adopt(testCfg.Name) },
+		"delete":              func() error { return m.Delete(testCfg.Name) },
+		"refresh":             func() error { _, err := m.Refresh(testCfg.Name); return err },
+		"try refresh":         func() error { _, err := m.TryRefresh(testCfg.Name); return err },
+		"try refresh unknown": func() error { _, err := m.TryRefresh("unregistered"); return err },
+		"begin login":         func() error { return m.BeginLogin(testCfg.Name) },
+		"complete login":      func() error { return m.CompleteChatGPTLogin(context.Background(), chatGPTConfig(), "c", "v") },
+		"get":                 func() error { _, err := m.Get(testCfg.Name); return err },
+		"lease":               func() error { _, err := m.Lease(testCfg.Name); return err },
+		"full refresh":        func() error { _, _, err := m.RefreshFull(testCfg.Name); return err },
 	} {
 		if err := operation(); !errors.Is(err, ErrStopped) || errors.Is(err, ErrRefreshPermanent) || errors.Is(err, ErrRefreshTransient) {
 			t.Errorf("%s did not return distinct stopped state", name)
@@ -509,5 +513,61 @@ func TestStopCannotReturnBeforeSuccessfulDirectorySync(t *testing.T) {
 	_, disk, _, err := m.loadFile(m.filePath(testCfg.Name))
 	if err != nil || disk.refresh != "R2" {
 		t.Fatal("completed durable successor lost")
+	}
+}
+
+func TestStopDrainsActiveChatGPTLoginCompletion(t *testing.T) {
+	for _, mode := range []string{"success", "transport"} {
+		t.Run(mode, func(t *testing.T) {
+			m := newTestManager(t, t.TempDir(), newTestKey(t))
+			cfg := chatGPTConfig()
+			if err := m.Register(cfg, chatGPTSeed()); err != nil {
+				t.Fatal(err)
+			}
+			if err := m.BeginLogin(cfg.Name); err != nil {
+				t.Fatal(err)
+			}
+			newAccess := chatGPTJWT("account_2")
+			d := &drainDoer{
+				entered:   make(chan struct{}),
+				cancelled: make(chan struct{}),
+				release:   make(chan struct{}),
+				status:    200,
+				body:      `{"access_token":"` + newAccess + `","refresh_token":"R2","expires_in":3600}`,
+				failed:    mode == "transport",
+			}
+			m.httpClient = d
+			completed := make(chan error, 1)
+			go func() {
+				completed <- m.CompleteChatGPTLogin(context.Background(), cfg, "auth-code", "pkce-verifier")
+			}()
+			<-d.entered
+			stopped := make(chan error, 1)
+			go func() { stopped <- m.Stop() }()
+			<-d.cancelled
+			assertStopPending(t, stopped)
+			close(d.release)
+			err := <-completed
+			stopErr := <-stopped
+			_, disk, _, loadErr := m.loadFile(m.filePath(cfg.Name))
+			if loadErr != nil {
+				t.Fatal(loadErr)
+			}
+			if mode == "success" {
+				if err != nil || stopErr != nil {
+					t.Fatalf("completed login exchange discarded or marked uncertain: err=%v stop=%v", err, stopErr)
+				}
+				if disk.refresh != "R2" || disk.metadata["account_id"] != "account_2" {
+					t.Fatal("completed login exchange was not committed before Stop returned")
+				}
+			} else {
+				if !errors.Is(err, ErrStopped) || stopErr != ErrDrainUncertain {
+					t.Fatalf("interrupted login exchange misclassified: err=%v stop=%v", err, stopErr)
+				}
+				if disk.refresh != "refresh-seed" || disk.metadata["account_id"] != "account_1" {
+					t.Fatal("interrupted login exchange altered existing durable tuple")
+				}
+			}
+		})
 	}
 }

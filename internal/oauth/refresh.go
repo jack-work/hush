@@ -24,6 +24,10 @@ func defaultHTTPClient() *http.Client {
 func (m *Manager) doRefresh(st *configState) (string, error) { return m.refreshState(st, true) }
 
 func (m *Manager) TryRefresh(name string) (string, error) {
+	if err := m.begin(); err != nil {
+		return "", err
+	}
+	defer m.work.Done()
 	st := m.lookup(name)
 	if st == nil {
 		return "", ErrNotFound

@@ -47,7 +47,7 @@ func (m *Manager) CompleteChatGPTLogin(ctx context.Context, cfg Config, code, ve
 	m.loginMu.Lock()
 	reserved := m.logins[cfg.Name]
 	m.loginMu.Unlock()
-	if !reserved || cfg.Grant != GrantChatGPT {
+	if !reserved || cfg.Grant != GrantChatGPT || cfg.TokenURL != ChatGPTTokenURL || cfg.ClientID != ChatGPTClientID || cfg.AuthorizeURL != ChatGPTAuthorizeURL || cfg.RedirectURI != ChatGPTRedirectURI {
 		return ErrOperationBusy
 	}
 	ctx, cancel := context.WithCancel(ctx)
@@ -58,12 +58,19 @@ func (m *Manager) CompleteChatGPTLogin(ctx context.Context, cfg Config, code, ve
 	if err != nil {
 		return err
 	}
+	if err = ctx.Err(); err != nil {
+		if m.closing() {
+			return ErrStopped
+		}
+		return err
+	}
 	form := url.Values{"grant_type": {"authorization_code"}, "client_id": {ChatGPTClientID}, "code": {code}, "redirect_uri": {ChatGPTRedirectURI}, "code_verifier": {verifier}}
 	tok, err := chatGPTTokenRequest(ctx, client, form, "")
 	if err != nil {
-		return err
-	}
-	if err = ctx.Err(); err != nil {
+		if m.closing() {
+			m.uncertain()
+			return ErrStopped
+		}
 		return err
 	}
 	grant, err := grantFor(cfg)

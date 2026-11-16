@@ -3,8 +3,6 @@
 package agent
 
 import (
-	"encoding/json"
-	"errors"
 	"net"
 	"os"
 	"path/filepath"
@@ -65,7 +63,7 @@ func TestRunAdoptsInheritedSocket(t *testing.T) {
 	// instead — which also proves the queued connection is served.
 	waitForReply(t, sock)
 
-	if !a.activated {
+	if !a.isActivated() {
 		t.Fatal("agent bound its own socket; expected it to adopt the inherited one")
 	}
 	if os.Getenv("LISTEN_PID") != "" || os.Getenv("LISTEN_FDS") != "" {
@@ -73,7 +71,7 @@ func TestRunAdoptsInheritedSocket(t *testing.T) {
 			os.Getenv("LISTEN_PID"), os.Getenv("LISTEN_FDS"))
 	}
 
-	a.listener.Close()
+	a.closeListener()
 	if err := <-done; err != nil {
 		t.Fatalf("agent exit: %v", err)
 	}
@@ -99,11 +97,11 @@ func TestRunBindsItselfWhenNotActivated(t *testing.T) {
 	go func() { done <- a.Run() }()
 	waitForSocket(t, a.sockPath())
 
-	if a.activated {
+	if a.isActivated() {
 		t.Fatal("agent adopted a descriptor claimed by another pid")
 	}
 
-	a.listener.Close()
+	a.closeListener()
 	if err := <-done; err != nil {
 		t.Fatalf("agent exit: %v", err)
 	}
@@ -209,26 +207,6 @@ func waitForReply(t *testing.T, sockPath string) {
 	t.Fatalf("no agent answered on %s: %v", sockPath, lastErr)
 }
 
-func statusRoundTrip(sockPath string) error {
-	conn, err := net.DialTimeout("unix", sockPath, 2*time.Second)
-	if err != nil {
-		return err
-	}
-	defer conn.Close()
-	conn.SetDeadline(time.Now().Add(2 * time.Second))
-	if _, err := conn.Write([]byte(`{"op":"status"}` + "\n")); err != nil {
-		return err
-	}
-	var resp Response
-	if err := json.NewDecoder(conn).Decode(&resp); err != nil {
-		return err
-	}
-	if resp.Error != "" {
-		return errors.New(resp.Error)
-	}
-	return nil
-}
-
 func hasProcNetUnix() bool {
 	_, err := os.Stat("/proc/net/unix")
 	return err == nil
@@ -261,7 +239,7 @@ func TestSelfBoundAgentDoesNotDeleteAReplacementNode(t *testing.T) {
 	go func() { done <- a.Run() }()
 	waitForReply(t, a.sockPath())
 
-	if !a.bound {
+	if !a.isBound() {
 		t.Fatal("agent should have bound its own socket")
 	}
 
@@ -272,7 +250,7 @@ func TestSelfBoundAgentDoesNotDeleteAReplacementNode(t *testing.T) {
 	}
 	replacement := listeningFd(t, a.sockPath())
 
-	a.listener.Close()
+	a.closeListener()
 	if err := <-done; err != nil {
 		t.Fatalf("agent exit: %v", err)
 	}

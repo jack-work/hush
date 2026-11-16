@@ -1,7 +1,10 @@
 package agent
 
 import (
+	"encoding/json"
+	"errors"
 	"log"
+	"net"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -27,16 +30,38 @@ func newTestAgent(t *testing.T, runtimeDir, stateDir string) *Agent {
 	return New(id, time.Minute, runtimeDir, stateDir, log.New(os.Stderr, "test: ", 0))
 }
 
+func statusRoundTrip(sockPath string) error {
+	conn, err := net.DialTimeout("unix", sockPath, 2*time.Second)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+	conn.SetDeadline(time.Now().Add(2 * time.Second))
+	if _, err := conn.Write([]byte(`{"op":"status"}` + "\n")); err != nil {
+		return err
+	}
+	var resp Response
+	if err := json.NewDecoder(conn).Decode(&resp); err != nil {
+		return err
+	}
+	if resp.Error != "" {
+		return errors.New(resp.Error)
+	}
+	return nil
+}
+
 func waitForSocket(t *testing.T, sockPath string) {
 	t.Helper()
 	deadline := time.Now().Add(2 * time.Second)
+	var lastErr error
 	for time.Now().Before(deadline) {
-		if ping(sockPath) == nil {
+		lastErr = statusRoundTrip(sockPath)
+		if lastErr == nil {
 			return
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	t.Fatalf("agent socket %s never came up", sockPath)
+	t.Fatalf("agent socket %s never came up: %v", sockPath, lastErr)
 }
 
 // TestSecondAgentRejected proves the single-instance lock: a second Run in
@@ -69,7 +94,7 @@ func TestSecondAgentRejected(t *testing.T) {
 		t.Fatalf("pid file content %q, want our pid %d", data, os.Getpid())
 	}
 
-	a1.listener.Close()
+	a1.closeListener()
 	if rerr := <-done; rerr != nil {
 		t.Fatalf("first agent exit: %v", rerr)
 	}
@@ -85,7 +110,7 @@ func TestLockReleasedOnShutdown(t *testing.T) {
 	done := make(chan error, 1)
 	go func() { done <- a1.Run() }()
 	waitForSocket(t, a1.sockPath())
-	a1.listener.Close()
+	a1.closeListener()
 	if err := <-done; err != nil {
 		t.Fatalf("first agent exit: %v", err)
 	}
@@ -101,7 +126,7 @@ func TestLockReleasedOnShutdown(t *testing.T) {
 	done2 := make(chan error, 1)
 	go func() { done2 <- a2.Run() }()
 	waitForSocket(t, a2.sockPath())
-	a2.listener.Close()
+	a2.closeListener()
 	if err := <-done2; err != nil {
 		t.Fatalf("successor agent exit: %v", err)
 	}

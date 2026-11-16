@@ -11,6 +11,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -25,7 +26,9 @@ import (
 // Agent holds the decrypted identity and manages the unix socket listener.
 type Agent struct {
 	id         *identity.DecryptedIdentity
+	mu         sync.Mutex
 	listener   net.Listener
+	closing    bool
 	ttl        time.Duration
 	deadline   time.Time
 	runtimeDir string
@@ -93,7 +96,10 @@ func (a *Agent) Run() (result error) {
 	if err != nil {
 		return err
 	}
+	a.mu.Lock()
 	a.activated = ln != nil
+	activated := a.activated
+	a.mu.Unlock()
 
 	if a.oauth != nil {
 		if err := a.oauth.Start(); err != nil {
@@ -101,7 +107,7 @@ func (a *Agent) Run() (result error) {
 		}
 	}
 
-	if a.activated {
+	if activated {
 		a.log.Printf("adopted socket-activated listener at %s", a.sockPath())
 	} else {
 		ln, err = a.bindSocket()
@@ -109,33 +115,45 @@ func (a *Agent) Run() (result error) {
 			return err
 		}
 	}
-	a.listener = ln
 
 	a.deadline = time.Now().Add(a.ttl)
+	a.mu.Lock()
+	a.listener = ln
+	closing := a.closing
+	a.mu.Unlock()
+	if closing {
+		ln.Close()
+		return nil
+	}
+
 	a.log.Printf("agent started, pid=%d, ttl=%s, deadline=%s",
 		os.Getpid(), a.ttl, a.deadline.Format(time.RFC3339))
 
-	// TTL timer.
 	ttlTimer := time.AfterFunc(a.ttl, func() {
 		a.log.Printf("TTL expired, shutting down")
-		a.listener.Close()
+		a.closeListener()
 	})
 	defer ttlTimer.Stop()
 
-	// Signal handler.
 	sigCh := make(chan os.Signal, 1)
+	stopSig := make(chan struct{})
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+	defer func() {
+		signal.Stop(sigCh)
+		close(stopSig)
+	}()
 	go func() {
-		sig := <-sigCh
-		a.log.Printf("received %s, shutting down", sig)
-		a.listener.Close()
+		select {
+		case sig := <-sigCh:
+			a.log.Printf("received %s, shutting down", sig)
+			a.closeListener()
+		case <-stopSig:
+		}
 	}()
 
-	// Accept loop — goroutine per connection.
 	for {
-		conn, err := a.listener.Accept()
+		conn, err := ln.Accept()
 		if err != nil {
-			// Listener closed by TTL timer or signal handler.
 			if isClosedErr(err) {
 				return nil
 			}
@@ -144,6 +162,29 @@ func (a *Agent) Run() (result error) {
 		}
 		go a.handleConn(conn)
 	}
+}
+
+func (a *Agent) closeListener() error {
+	a.mu.Lock()
+	a.closing = true
+	ln := a.listener
+	a.mu.Unlock()
+	if ln != nil {
+		return ln.Close()
+	}
+	return nil
+}
+
+func (a *Agent) isActivated() bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.activated
+}
+
+func (a *Agent) isBound() bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.bound
 }
 
 // bindSocket is the self-bind path: no service manager handed us a
@@ -192,7 +233,9 @@ func (a *Agent) bindSocket() (net.Listener, error) {
 		os.Remove(sockPath)
 		return nil, fmt.Errorf("chmod socket: %w", err)
 	}
+	a.mu.Lock()
 	a.bound = true
+	a.mu.Unlock()
 	return ln, nil
 }
 
@@ -241,7 +284,7 @@ func (a *Agent) handleConn(conn net.Conn) {
 	// releases the lock. This is the cross-platform stop path (Windows
 	// cannot SIGTERM a detached daemon).
 	if req.Op == "shutdown" {
-		a.listener.Close()
+		a.closeListener()
 	}
 }
 
@@ -448,7 +491,10 @@ func (a *Agent) shutdown() error {
 		// question inode reuse cannot forge — is anyone LISTENING there?
 		// Our own listener is closed by the time shutdown runs, so a
 		// listening node at our path belongs to somebody else.
-		if a.bound {
+		a.mu.Lock()
+		bound := a.bound
+		a.mu.Unlock()
+		if bound {
 			if socketIsListening(a.sockPath()) {
 				a.log.Printf("socket at %s is now held by another listener (a socket unit armed while we ran); leaving it alone",
 					a.sockPath())

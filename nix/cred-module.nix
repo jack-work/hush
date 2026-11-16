@@ -64,7 +64,16 @@ let
     }
   '';
 
-  exposes = p: p != "" && (p == "/" || lib.hasPrefix (dirOf socketPath) p || lib.hasPrefix (p + "/") socketPath);
+  stripSlash = s:
+    if s != "/" && lib.hasSuffix "/" s then stripSlash (lib.removeSuffix "/" s) else s;
+  exposes = raw:
+    let p = stripSlash raw; in
+    p != "" && (
+      p == "/"
+      || p == socketPath
+      || lib.hasPrefix (p + "/") socketPath
+      || lib.hasPrefix (dirOf socketPath + "/") p
+    );
 
   hush = lib.getExe cfg.package;
 in

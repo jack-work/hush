@@ -27,12 +27,16 @@ let
   box = bindMounts: { box = { config = { }; inherit bindMounts; }; };
   binds = {
     socket-dir = box { "/run/hush-cred" = { }; };
+    dir-slash = box { "/minter" = { hostPath = "/run/hush-cred/"; }; };
+    direct-sock = box { "/sock" = { hostPath = "/run/hush-cred/cred.sock"; }; };
     run = box { "/run" = { hostPath = "/run"; }; };
+    run-slash = box { "/run" = { hostPath = "/run/"; }; };
     renamed = box { "/minter" = { hostPath = "/run/hush-cred"; }; };
   };
   results = builtins.mapAttrs (_: failed) binds;
   missed = builtins.attrNames (pkgs.lib.filterAttrs (_: r: r == [ ]) results);
-  clean = failed (box { "/srv/data" = { hostPath = "/srv/data"; }; });
+  clean = failed (box { "/srv/data" = { hostPath = "/srv/data"; }; })
+    ++ failed (box { "/other" = { hostPath = "/run/hush-cred-other"; }; });
 in
 assert pkgs.lib.assertMsg (missed == [ ]) "a container bind exposing the minter socket passed: ${toString missed}";
 assert pkgs.lib.assertMsg (clean == [ ]) "an unrelated bind was refused: ${toString clean}";

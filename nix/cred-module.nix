@@ -11,7 +11,7 @@ let
 
   instanceType = types.submodule {
     options = {
-      kind = mkOption { type = types.enum [ "anthropic" "copilot" "chatgpt" ]; };
+      kind = mkOption { type = types.enum [ "refresh_token" "copilot" "chatgpt" ]; };
       clientId = mkOption { type = types.str; default = ""; };
       tokenUrl = mkOption { type = types.str; default = ""; };
       scopes = mkOption { type = types.str; default = ""; };

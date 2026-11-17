@@ -21,7 +21,7 @@ func writeCredConfig(t *testing.T) string {
 	body := `recipient = "` + key.Recipient().String() + `"
 allow_user = "0"
 [instances.anthropic-work]
-kind = "anthropic"
+kind = "refresh_token"
 authorize_url = "https://claude.example/oauth/authorize"
 token_url = "https://console.example/v1/oauth/token"
 redirect_uri = "https://console.example/oauth/code/callback"

@@ -19,9 +19,9 @@ import (
 )
 
 const (
-	KindAnthropic = "anthropic"
-	KindCopilot   = "copilot"
-	KindChatGPT   = "chatgpt"
+	KindRefreshToken = "refresh_token"
+	KindCopilot      = "copilot"
+	KindChatGPT      = "chatgpt"
 )
 
 type Instance struct {
@@ -107,7 +107,7 @@ func (in Instance) validate(name string) error {
 	}
 	need := map[string]string{"token_url": in.TokenURL}
 	switch in.Kind {
-	case KindAnthropic:
+	case KindRefreshToken:
 		need["authorize_url"] = in.AuthorizeURL
 		need["redirect_uri"] = in.RedirectURI
 		if in.DeviceURL != "" || in.GitHubTokenURL != "" {
@@ -117,10 +117,10 @@ func (in Instance) validate(name string) error {
 		need["device_url"] = in.DeviceURL
 		need["github_token_url"] = in.GitHubTokenURL
 		if in.AuthorizeURL != "" || in.RedirectURI != "" {
-			return fail("authorize_url and redirect_uri belong to kind %q", KindAnthropic)
+			return fail("authorize_url and redirect_uri belong to kind %q", KindRefreshToken)
 		}
 	default:
-		return fail("kind must be %q or %q, not %q", KindAnthropic, KindCopilot, in.Kind)
+		return fail("kind must be %q, %q or %q, not %q", KindRefreshToken, KindCopilot, KindChatGPT, in.Kind)
 	}
 	for key, raw := range need {
 		if raw == "" {
@@ -152,7 +152,7 @@ func (in Instance) OAuthConfig(name string) oauth.Config {
 		Scopes:   in.Scopes,
 	}
 	switch in.Kind {
-	case KindAnthropic:
+	case KindRefreshToken:
 		c.AuthorizeURL = in.AuthorizeURL
 		c.RedirectURI = in.RedirectURI
 		c.Grant = oauth.GrantRefreshToken

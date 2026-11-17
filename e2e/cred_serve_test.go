@@ -73,7 +73,7 @@ func newCredMinter(t *testing.T, ep *httptest.Server) *credMinter {
 	must(os.WriteFile(m.conf, []byte(fmt.Sprintf(`recipient = %q
 allow_user = "%d"
 [instances.%s]
-kind = "anthropic"
+kind = "refresh_token"
 authorize_url = "https://claude.example/oauth/authorize"
 token_url = %q
 redirect_uri = "https://console.example/oauth/code/callback"

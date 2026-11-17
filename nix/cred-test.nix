@@ -98,7 +98,7 @@ pkgs.testers.runNixOSTest {
       inherit recipient;
       identityFile = "/etc/hush-cred-test/identity";
       instances.anthropic-work = {
-        kind = "anthropic";
+        kind = "refresh_token";
         clientId = "test-client";
         authorizeUrl = "https://claude.test/oauth/authorize";
         tokenUrl = "https://tokens.test/v1/oauth/token";

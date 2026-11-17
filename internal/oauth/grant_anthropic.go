@@ -109,3 +109,18 @@ func anthropicTokenRequest(ctx context.Context, doer httpDoer, contentType strin
 	}
 	return Tokens{AccessToken: doc.Access, RefreshToken: doc.Refresh, ExpiresIn: doc.ExpiresIn}, nil
 }
+
+func ExchangeAnthropicCode(ctx context.Context, doer httpDoer, code, state, verifier string) (Tokens, error) {
+	body, err := json.Marshal(map[string]string{
+		"grant_type":    "authorization_code",
+		"client_id":     AnthropicClientID,
+		"code":          code,
+		"state":         state,
+		"redirect_uri":  AnthropicRedirectURI,
+		"code_verifier": verifier,
+	})
+	if err != nil {
+		return Tokens{}, fmt.Errorf("%w: cannot build Anthropic request", ErrRefreshTransient)
+	}
+	return anthropicTokenRequest(ctx, doer, "application/json", strings.NewReader(string(body)), "")
+}

@@ -40,6 +40,21 @@ func (m *Manager) CancelLogin(name string) {
 }
 
 func (m *Manager) CompleteChatGPTLogin(ctx context.Context, cfg Config, code, verifier string) error {
+	pinned := cfg.Grant == GrantChatGPT && cfg.TokenURL == ChatGPTTokenURL && cfg.ClientID == ChatGPTClientID && cfg.AuthorizeURL == ChatGPTAuthorizeURL && cfg.RedirectURI == ChatGPTRedirectURI
+	return m.completeLogin(ctx, cfg, pinned, func(ctx context.Context, client httpDoer) (Tokens, error) {
+		form := url.Values{"grant_type": {"authorization_code"}, "client_id": {ChatGPTClientID}, "code": {code}, "redirect_uri": {ChatGPTRedirectURI}, "code_verifier": {verifier}}
+		return chatGPTTokenRequest(ctx, client, form, "")
+	})
+}
+
+func (m *Manager) CompleteAnthropicLogin(ctx context.Context, cfg Config, code, state, verifier string) error {
+	pinned := cfg.Grant == GrantAnthropic && AnthropicPinned(cfg)
+	return m.completeLogin(ctx, cfg, pinned, func(ctx context.Context, client httpDoer) (Tokens, error) {
+		return ExchangeAnthropicCode(ctx, client, code, state, verifier)
+	})
+}
+
+func (m *Manager) completeLogin(ctx context.Context, cfg Config, pinned bool, exchange func(context.Context, httpDoer) (Tokens, error)) error {
 	if err := m.begin(); err != nil {
 		return err
 	}
@@ -47,7 +62,7 @@ func (m *Manager) CompleteChatGPTLogin(ctx context.Context, cfg Config, code, ve
 	m.loginMu.Lock()
 	reserved := m.logins[cfg.Name]
 	m.loginMu.Unlock()
-	if !reserved || cfg.Grant != GrantChatGPT || cfg.TokenURL != ChatGPTTokenURL || cfg.ClientID != ChatGPTClientID || cfg.AuthorizeURL != ChatGPTAuthorizeURL || cfg.RedirectURI != ChatGPTRedirectURI {
+	if !reserved || !pinned {
 		return ErrOperationBusy
 	}
 	ctx, cancel := context.WithCancel(ctx)
@@ -64,8 +79,7 @@ func (m *Manager) CompleteChatGPTLogin(ctx context.Context, cfg Config, code, ve
 		}
 		return err
 	}
-	form := url.Values{"grant_type": {"authorization_code"}, "client_id": {ChatGPTClientID}, "code": {code}, "redirect_uri": {ChatGPTRedirectURI}, "code_verifier": {verifier}}
-	tok, err := chatGPTTokenRequest(ctx, client, form, "")
+	tok, err := exchange(ctx, client)
 	if err != nil {
 		if m.closing() {
 			m.uncertain()

@@ -187,11 +187,10 @@ func TestPrincipalRefusesAPeerNotInItsUsers(t *testing.T) {
 
 func TestPrincipalSocketServesCredOnly(t *testing.T) {
 	p := newPrincipalRig(t, "", twoPrincipals)
-	if a := p.request("rou2", http.MethodPost, "/refresh/"+instName); a.status != http.StatusNotFound {
-		t.Fatalf("refresh on a principal socket: got %d %q", a.status, a.raw)
-	}
-	if a := p.request("rou2", http.MethodPost, "/cred/"+instName); a.status != http.StatusMethodNotAllowed {
-		t.Fatalf("POST /cred: got %d %q", a.status, a.raw)
+	for _, c := range [][2]string{{http.MethodPost, "/refresh/" + instName}, {http.MethodPost, "/cred/" + instName}, {http.MethodGet, "/status"}, {http.MethodGet, "/other"}} {
+		if a := p.request("rou2", c[0], c[1]); a.status != http.StatusNotFound || a.Error != principalOnlyCred {
+			t.Fatalf("%s %s on a principal socket: got %d %q", c[0], c[1], a.status, a.raw)
+		}
 	}
 }
 

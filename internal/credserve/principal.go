@@ -44,6 +44,8 @@ func ResolvePrincipals(c *Config, lookup func(string) (uint32, error)) (map[stri
 
 type principalKey struct{}
 
+const principalOnlyCred = "a principal socket serves /cred/<name> only"
+
 // PrincipalListener tags every connection ln accepts with principal, so
 // requests on it are judged against that principal's grants.
 func PrincipalListener(ln net.Listener, principal string) net.Listener {
@@ -91,12 +93,11 @@ func (s *Server) servePrincipal(w http.ResponseWriter, r *http.Request, name str
 		return
 	}
 	cred, found := strings.CutPrefix(r.URL.Path, "/cred/")
-	if !found || cred == "" || strings.Contains(cred, "/") {
-		writeError(w, http.StatusNotFound, "not_found", "a principal socket serves GET /cred/<name> only")
-		return
-	}
-	if r.Method != http.MethodGet {
-		writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "GET only")
+	if !found || cred == "" || strings.Contains(cred, "/") || r.Method != http.MethodGet {
+		// The broker this replaces answers exactly this on a principal socket; callers may match on it.
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusNotFound)
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": principalOnlyCred})
 		return
 	}
 	if !p.Credentials[cred] {

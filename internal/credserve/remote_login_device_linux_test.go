@@ -164,6 +164,6 @@ func TestChatGPTRemoteLoginUnchangedForOtherKinds(t *testing.T) {
 	}
 	res.Body.Close()
 	if res.StatusCode != 404 {
-		t.Fatalf("an anthropic instance must still have no remote sign-in: %d", res.StatusCode)
+		t.Fatalf("a refresh_token instance must still have no remote sign-in: %d", res.StatusCode)
 	}
 }

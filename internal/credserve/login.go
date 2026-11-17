@@ -50,8 +50,8 @@ func (l *Login) Run(ctx context.Context) (result error) {
 	var tok oauth.Tokens
 	var err error
 	switch in.Kind {
-	case KindAnthropic:
-		tok, err = l.anthropic(ctx, in)
+	case KindRefreshToken:
+		tok, err = l.pasteLogin(ctx, in)
 	case KindCopilot:
 		tok, err = l.copilot(ctx, in)
 	case KindChatGPT:
@@ -108,7 +108,7 @@ func (l *Login) checkExisting() error {
 	return fmt.Errorf("%s is signed in and not marked sign-in needed; stop hush-cred and pass --replace to sign in again", l.Name)
 }
 
-func (l *Login) anthropic(ctx context.Context, in Instance) (oauth.Tokens, error) {
+func (l *Login) pasteLogin(ctx context.Context, in Instance) (oauth.Tokens, error) {
 	pkce, err := oauth.GeneratePKCE()
 	if err != nil {
 		return oauth.Tokens{}, err

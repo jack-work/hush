@@ -265,6 +265,9 @@ func runCredLogin(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
+	if conf.Instances[args[0]].Kind == credserve.KindExec {
+		return fmt.Errorf("%s is kind %q: it signs in through its own command, not hush", args[0], credserve.KindExec)
+	}
 	read := credReadCode
 	if read == nil && conf.Instances[args[0]].Kind != credserve.KindChatGPT {
 		if !term.IsTerminal(int(os.Stdin.Fd())) {

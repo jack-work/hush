@@ -37,6 +37,9 @@ type Instance struct {
 	// refused: the credential, the principal, the peer uid and the status.
 	// Never the token.
 	Audit bool `toml:"audit"`
+	// Command and Timeout belong to kind "exec" only.
+	Command []string `toml:"command"`
+	Timeout string   `toml:"timeout"`
 }
 
 // Principal is one caller identity with its own socket. Who may open the
@@ -148,6 +151,12 @@ func (in Instance) validate(name string) error {
 	fail := func(format string, a ...any) error {
 		return fmt.Errorf("cred config: instance %s: "+format, append([]any{name}, a...)...)
 	}
+	if in.Kind == KindExec {
+		return in.validateExec(name)
+	}
+	if len(in.Command) > 0 || in.Timeout != "" {
+		return fail("command and timeout belong to kind %q", KindExec)
+	}
 	if in.Kind == KindChatGPT {
 		if in.AuthorizeURL != oauth.ChatGPTAuthorizeURL || in.TokenURL != oauth.ChatGPTTokenURL || in.ClientID != oauth.ChatGPTClientID || in.RedirectURI != oauth.ChatGPTRedirectURI || in.Scopes != oauth.ChatGPTScopes || in.DeviceURL != "" || in.GitHubTokenURL != "" {
 			return fail("ChatGPT endpoints, client and callback are pinned")
@@ -172,7 +181,7 @@ func (in Instance) validate(name string) error {
 			return fail("authorize_url and redirect_uri belong to kind %q", KindAnthropic)
 		}
 	default:
-		return fail("kind must be %q or %q, not %q", KindAnthropic, KindCopilot, in.Kind)
+		return fail("kind must be %q, %q, %q or %q, not %q", KindAnthropic, KindCopilot, KindChatGPT, KindExec, in.Kind)
 	}
 	for key, raw := range need {
 		if raw == "" {

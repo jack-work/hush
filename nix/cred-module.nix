@@ -11,7 +11,7 @@ let
 
   instanceType = types.submodule {
     options = {
-      kind = mkOption { type = types.enum [ "anthropic" "copilot" "chatgpt" ]; };
+      kind = mkOption { type = types.enum [ "anthropic" "copilot" "chatgpt" "exec" ]; };
       clientId = mkOption { type = types.str; default = ""; };
       tokenUrl = mkOption { type = types.str; default = ""; };
       scopes = mkOption { type = types.str; default = ""; };
@@ -24,6 +24,16 @@ let
         default = false;
         description = "Log one line per request for this credential (credential, principal, peer uid, status; never the token).";
       };
+      command = mkOption {
+        type = types.listOf types.str;
+        default = [ ];
+        description = ''
+          kind = "exec" only: argv of a command that prints {"token", "expires_at"}; exit 3 = sign-in needed. It runs as
+          the minter (uid hush-cred, ProtectHome, inside the egress fence), so it can reach only the token endpoints:
+          a tool that reads a user's own cache belongs in a hush cred serve run as that user.
+        '';
+      };
+      timeout = mkOption { type = types.nullOr types.str; default = null; description = "kind = \"exec\" only (default 30s)."; };
     };
   };
 
@@ -67,6 +77,8 @@ let
     device_url = i.deviceUrl;
     github_token_url = i.githubTokenUrl;
     audit = i.audit;
+    command = if i.command == [ ] then null else i.command;
+    timeout = i.timeout;
   };
 
   configFile = (pkgs.formats.toml { }).generate "hush-cred.toml" ({
@@ -96,7 +108,7 @@ let
   }) cfg.principals;
   allSocketPaths = lib.optional (cfg.allowUser != null) socketPath ++ map (p: p.socketPath) (lib.attrValues cfg.principals);
 
-  egressUrls = lib.concatMap (i: if i.kind == "chatgpt" then [ "https://auth.openai.com/oauth/token" ] else lib.filter (u: u != null) [ i.tokenUrl i.deviceUrl i.githubTokenUrl ])
+  egressUrls = lib.concatMap (i: if i.kind == "exec" then [ ] else if i.kind == "chatgpt" then [ "https://auth.openai.com/oauth/token" ] else lib.filter (u: u != null) [ i.tokenUrl i.deviceUrl i.githubTokenUrl ])
     (lib.attrValues cfg.instances);
   hostOf = u: let m = builtins.match "https://([a-zA-Z0-9.-]+)(/.*)?" u; in if m == null then null else lib.head m;
   egressHosts = lib.unique (lib.filter (h: h != null) (map hostOf egressUrls));

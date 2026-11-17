@@ -73,7 +73,7 @@ pkgs.testers.runNixOSTest {
   nodes.minter = { nodes, ... }: {
     imports = [ self.nixosModules.hush-cred ];
     security.pki.certificateFiles = [ "${certs}/ca.pem" ];
-    environment.systemPackages = [ pkgs.curl pkgs.restic pkgs.nftables ];
+    environment.systemPackages = [ pkgs.curl pkgs.restic pkgs.nftables pkgs.acl ];
     networking.nameservers = pkgs.lib.mkForce [ "127.0.0.1" ];
     services.dnsmasq = {
       enable = true;
@@ -104,7 +104,10 @@ pkgs.testers.runNixOSTest {
         tokenUrl = "https://tokens.test/v1/oauth/token";
         redirectUri = "https://tokens.test/oauth/code/callback";
         scopes = "user:inference";
+        audit = true;
       };
+      # A principal with its own socket: outsider (not in group rou2) may read anthropic-work there and nothing else.
+      principals.keel = { users = [ "outsider" ]; credentials = [ "anthropic-work" ]; };
     };
 
     systemd.services.local-http = {
@@ -149,7 +152,7 @@ pkgs.testers.runNixOSTest {
     endpoint.wait_for_unit("fake-endpoint.service")
     endpoint.wait_for_unit("dnsmasq.service")
     endpoint.wait_for_open_port(443)
-    for u in ["hush-cred-fence.service", "dnsmasq.service", "hush-cred.socket", "hush-cred.service", "local-http.service"]:
+    for u in ["hush-cred-fence.service", "dnsmasq.service", "hush-cred.socket", "hush-cred-keel.socket", "hush-cred.service", "local-http.service"]:
         minter.wait_for_unit(u)
     minter.wait_for_open_port(8080)
 
@@ -178,12 +181,26 @@ pkgs.testers.runNixOSTest {
     with subtest("(v) login reads code#state from the terminal"):
         fake("login_expires_in", 35)
         # login refuses while `cred serve` owns the state (.credential-owner.lock): stop the owner first, as an operator would.
-        minter.succeed("systemctl stop hush-cred.socket hush-cred.service")
+        minter.succeed("systemctl stop hush-cred.socket hush-cred-keel.socket hush-cred.service")
         print(minter.succeed("${pkgs.python3}/bin/python3 ${ptyLogin}"))
-        minter.succeed("systemctl start hush-cred.socket")
+        minter.succeed("systemctl start hush-cred.socket hush-cred-keel.socket")
         assert count("logins") == 1
         status, doc = cred("rou2", 200)
         assert doc["token"] == "at-login-1", doc
+
+    with subtest("principal socket: 0600 hush-cred plus a uid ACL, its grant only"):
+        minter.succeed("test \"$(stat -c '%U %a' /run/hush-cred/keel.sock)\" = 'hush-cred 600'")
+        minter.succeed("getfacl -p /run/hush-cred/keel.sock | grep -qx 'user:outsider:rw-'")
+        out = minter.succeed("runuser -u outsider -- curl -s --unix-socket /run/hush-cred/keel.sock http://m/cred/anthropic-work")
+        replies.append(out)
+        assert json.loads(out)["token"] == "at-login-1", out
+        out = minter.succeed("runuser -u outsider -- curl -s -w '\n%{http_code}' --unix-socket /run/hush-cred/keel.sock http://m/cred/not-granted")
+        body, status = out.rsplit("\n", 1)
+        assert status == "403" and json.loads(body)["error"] == "not_granted", out
+        minter.fail("runuser -u rou2 -- curl -sf --unix-socket /run/hush-cred/keel.sock http://m/cred/anthropic-work")
+        journal = minter.succeed("journalctl -u hush-cred.service -o cat --no-pager")
+        assert "cred: audit anthropic-work principal=keel" in journal, journal
+        assert "at-login-1" not in journal, "a token reached the journal"
 
     with subtest("peer credentials: a group member that is not rou2 is refused"):
         status, doc = cred("intruder", 403)

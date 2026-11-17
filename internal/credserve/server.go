@@ -10,6 +10,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -34,6 +35,8 @@ type Server struct {
 
 	mu          sync.Mutex
 	cells       map[string]*cell
+	principals  map[string]PrincipalAuth
+	noLegacy    bool
 	pending     map[string]*remoteLogin
 	connMu      sync.Mutex
 	connections sync.WaitGroup
@@ -66,6 +69,9 @@ func (s *Server) HTTPServer() *http.Server {
 		ReadHeaderTimeout: 5 * time.Second,
 		ConnState:         s.connectionState,
 		ConnContext: func(ctx context.Context, c net.Conn) context.Context {
+			if pc, ok := c.(*principalConn); ok {
+				ctx = context.WithValue(ctx, principalKey{}, pc.principal)
+			}
 			uid, err := peerUID(c)
 			if err != nil {
 				return ctx
@@ -80,8 +86,30 @@ func (s *Server) Serve(ln net.Listener) error {
 }
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	principal, _ := r.Context().Value(principalKey{}).(string)
+	if name, ok := strings.CutPrefix(r.URL.Path, "/cred/"); ok {
+		if in, ok := s.cfg.Instances[name]; ok && in.Audit {
+			rec := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
+			w = rec
+			defer func() {
+				who := principal
+				if who == "" {
+					who = "owner"
+				}
+				uid := "-"
+				if u, ok := r.Context().Value(peerKey{}).(uint32); ok {
+					uid = strconv.FormatUint(uint64(u), 10)
+				}
+				s.logger.Printf("cred: audit %s principal=%s uid=%s -> %d", name, who, uid, rec.status)
+			}()
+		}
+	}
+	if principal != "" {
+		s.servePrincipal(w, r, principal)
+		return
+	}
 	uid, ok := r.Context().Value(peerKey{}).(uint32)
-	if !ok || uid != s.allowUID {
+	if !ok || uid != s.allowUID || s.noLegacy {
 		if ok {
 			s.logger.Printf("cred: refused peer uid %d", uid)
 		} else {

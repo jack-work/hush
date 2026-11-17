@@ -10,6 +10,9 @@ import (
 )
 
 func peerUID(c net.Conn) (uint32, error) {
+	if pc, ok := c.(*principalConn); ok {
+		c = pc.Conn
+	}
 	uc, ok := c.(*net.UnixConn)
 	if !ok {
 		return 0, errors.New("not a unix socket")

@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -80,7 +81,7 @@ func runCmd(cmd *cobra.Command, args []string) error {
 		// Without this, any command whose credentials are entirely OAuth
 		// fails the moment the agent's TTL lapses — which for a long-running
 		// unit means dying on a timer.
-		if err := ensureAgent(sockPath); err != nil {
+		if err := ensureAgent(context.Background(), sockPath); err != nil {
 			return "", err
 		}
 		return client.NewWithSocket(sockPath).OAuthGet(credential)
@@ -121,7 +122,7 @@ func decryptViaAgent(secretsFile string) (map[string]string, error) {
 	sockPath := filepath.Join(cfg.RuntimeDir, "agent.sock")
 
 	// Ensure agent is running.
-	if err := ensureAgent(sockPath); err != nil {
+	if err := ensureAgent(context.Background(), sockPath); err != nil {
 		return nil, err
 	}
 
@@ -135,7 +136,7 @@ func decryptViaAgent(secretsFile string) (map[string]string, error) {
 // autostart path. Only the passphrase (TTY) backend needs an interactive
 // terminal; when it needs one and none exists, the unlock returns a clear
 // error, which we augment with recovery guidance.
-func ensureAgent(sockPath string) error {
+func ensureAgent(ctx context.Context, sockPath string) error {
 	if err := pingAgent(sockPath); err == nil {
 		return nil // agent is alive
 	}
@@ -148,7 +149,7 @@ func ensureAgent(sockPath string) error {
 		fmt.Fprintln(os.Stderr, "No running agent. Starting one...")
 	}
 
-	id, err := promptAndUnlock(cfg.IdentityFile)
+	id, err := promptAndUnlock(ctx, cfg.IdentityFile)
 	if err != nil {
 		if hint := unlockHint(err); hint != "" {
 			return fmt.Errorf("%w\n\n%s", err, hint)

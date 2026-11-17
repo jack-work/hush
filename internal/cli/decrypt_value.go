@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"os"
@@ -47,7 +48,7 @@ func runDecryptValue(cmd *cobra.Command, args []string) error {
 
 	sockPath := filepath.Join(cfg.RuntimeDir, "agent.sock")
 
-	if err := ensureAgent(sockPath); err != nil {
+	if err := ensureAgent(context.Background(), sockPath); err != nil {
 		return err
 	}
 

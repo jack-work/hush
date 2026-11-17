@@ -2,12 +2,14 @@ package cli
 
 import (
 	"bufio"
+	"context"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
@@ -75,7 +77,7 @@ Subsequent calls with the same name replace the existing entry.`,
 
 func runOAuthRegister(cmd *cobra.Command, args []string) error {
 	name := args[0]
-	c, err := connectAgent()
+	c, err := connectAgent(context.Background())
 	if err != nil {
 		return err
 	}
@@ -198,13 +200,9 @@ var oauthGetCmd = &cobra.Command{
 	Short: "Print the cached access token",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		c, err := connectAgent()
+		tok, err := tokenWithin(oauthTokenTimeout, "get", args[0], (*client.Client).OAuthGet)
 		if err != nil {
 			return err
-		}
-		tok, err := c.OAuthGet(args[0])
-		if err != nil {
-			return formatOAuthErr(err)
 		}
 		fmt.Println(tok)
 		return nil
@@ -216,17 +214,62 @@ var oauthRefreshCmd = &cobra.Command{
 	Short: "Force a refresh and print the new access token",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		c, err := connectAgent()
+		tok, err := tokenWithin(oauthTokenTimeout, "refresh", args[0], (*client.Client).OAuthRefresh)
 		if err != nil {
 			return err
-		}
-		tok, err := c.OAuthRefresh(args[0])
-		if err != nil {
-			return formatOAuthErr(err)
 		}
 		fmt.Println(tok)
 		return nil
 	},
+}
+
+var oauthTokenTimeout time.Duration
+
+const defaultOAuthTokenTimeout = time.Minute
+
+const unlockReapGrace = 2 * time.Second
+
+func init() {
+	for _, c := range []*cobra.Command{oauthGetCmd, oauthRefreshCmd} {
+		c.Flags().DurationVar(&oauthTokenTimeout, "timeout", defaultOAuthTokenTimeout,
+			"give up when no token arrives within this long, starting the agent included")
+	}
+}
+
+func tokenWithin(limit time.Duration, verb, name string, ask func(*client.Client, string) (string, error)) (string, error) {
+	if limit <= 0 {
+		return "", fmt.Errorf("--timeout must be positive, got %s", limit)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), limit)
+	defer cancel()
+	type answer struct {
+		token string
+		err   error
+	}
+	done := make(chan answer, 1)
+	go func() {
+		c, err := connectAgent(ctx)
+		if err != nil {
+			done <- answer{err: err}
+			return
+		}
+		tok, err := ask(c, name)
+		if err != nil {
+			err = formatOAuthErr(err)
+		}
+		done <- answer{tok, err}
+	}()
+	select {
+	case a := <-done:
+		return a.token, a.err
+	case <-ctx.Done():
+	}
+	select {
+	case <-done:
+	case <-time.After(unlockReapGrace):
+	}
+	return "", fmt.Errorf("hush oauth %s %s: no token within %s; the agent did not answer, or starting it did not finish (see %s)",
+		verb, name, limit, filepath.Join(cfg.StateDir, "agent.log"))
 }
 
 var oauthListCmd = &cobra.Command{
@@ -234,7 +277,7 @@ var oauthListCmd = &cobra.Command{
 	Short: "List registered OAuth credential names",
 	Args:  cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		c, err := connectAgent()
+		c, err := connectAgent(context.Background())
 		if err != nil {
 			return err
 		}
@@ -254,7 +297,7 @@ var oauthDeleteCmd = &cobra.Command{
 	Short: "Delete an OAuth credential",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		c, err := connectAgent()
+		c, err := connectAgent(context.Background())
 		if err != nil {
 			return err
 		}
@@ -270,7 +313,7 @@ var oauthDeleteCmd = &cobra.Command{
 // agent's TTL is measured in minutes: a unit that starts healthy would fail a
 // half hour later with advice nobody is present to take. The secrets path has
 // always started the agent on demand; so must this one.
-func connectAgent() (*client.Client, error) {
+func connectAgent(ctx context.Context) (*client.Client, error) {
 	c, err := client.New()
 	if err != nil {
 		return nil, err
@@ -296,7 +339,7 @@ func connectAgent() (*client.Client, error) {
 		return nil, fmt.Errorf("hush agent socket at %s is held but not answering; "+
 			"a socket unit is armed, so check: systemctl --user status hush-agent.service", sockPath)
 	}
-	if err := ensureAgent(sockPath); err != nil {
+	if err := ensureAgent(ctx, sockPath); err != nil {
 		return nil, fmt.Errorf("hush agent is not running and could not be started: %w", err)
 	}
 	c, err = client.New()

@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -72,7 +73,7 @@ func runOAuthLogin(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("authorize_url, token_url, redirect_uri, and client_id are all required")
 	}
 
-	c, err := connectAgent()
+	c, err := connectAgent(context.Background())
 	if err != nil {
 		return err
 	}

@@ -144,7 +144,7 @@ func runUpBody(cmd *cobra.Command, args []string, activated bool) error {
 	}
 
 	// Prompt for passphrase and decrypt identity.
-	id, err := promptAndUnlock(cfg.IdentityFile)
+	id, err := promptAndUnlock(context.Background(), cfg.IdentityFile)
 	if err != nil {
 		return err
 	}
@@ -200,7 +200,7 @@ func lockHolder(pidPath string) string {
 	return "unknown pid"
 }
 
-func promptAndUnlock(identityFile string) (*identity.DecryptedIdentity, error) {
+func promptAndUnlock(ctx context.Context, identityFile string) (*identity.DecryptedIdentity, error) {
 	// Build the resolver from the active config. Method defaults to
 	// "passphrase" (TTY prompt) when nothing is set in hush.toml, so
 	// behavior is identical to before this seam existed. Verify keeps
@@ -218,7 +218,7 @@ func promptAndUnlock(identityFile string) (*identity.DecryptedIdentity, error) {
 	if err != nil {
 		return nil, err
 	}
-	passphrase, err := u.Passphrase(context.Background())
+	passphrase, err := u.Passphrase(ctx)
 	if err != nil {
 		return nil, err
 	}

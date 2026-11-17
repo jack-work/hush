@@ -56,6 +56,7 @@ func TestAnthropicGrantRefusesAnythingButThePinnedSignIn(t *testing.T) {
 		"client":        func(c *Config) { c.ClientID = "other" },
 		"redirect":      func(c *Config) { c.RedirectURI = "http://localhost:1455/callback" },
 		"scopes":        func(c *Config) { c.Scopes = "user:inference" },
+		"key scope":     func(c *Config) { c.Scopes = "org:create_api_key user:profile user:inference" },
 	} {
 		t.Run(name, func(t *testing.T) {
 			cfg := anthropicConfig()

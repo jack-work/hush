@@ -17,7 +17,7 @@ The Nix module accepts `services.hush-cred.instances.anthropic-max.kind = "anthr
 | token_url | `https://console.anthropic.com/v1/oauth/token` |
 | redirect_uri | `https://console.anthropic.com/oauth/code/callback` |
 | client_id | `9d1c250a-e61b-44d9-88ed-5944d1962f5e` (the Claude Code public client) |
-| scopes | `org:create_api_key user:profile user:inference` |
+| scopes | `user:profile user:inference` |
 
 These are the values figaro's own Anthropic login uses (`internal/auth/anthropic.go`). The egress fence opens `console.anthropic.com:443` only; the authorize host is visited by the browser, never by the minter. A policy change on Anthropic's side is a source change here, not a config edit.
 

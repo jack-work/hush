@@ -82,6 +82,7 @@ func TestAnthropicConfigPinsEveryEndpoint(t *testing.T) {
 		"redirect_uri='http://localhost:5555/callback'",
 		"client_id='other'",
 		"scopes='user:inference'",
+		"scopes='org:create_api_key user:profile user:inference'",
 		"device_url='https://github.example/device'",
 		"github_token_url='https://github.example/token'",
 	} {

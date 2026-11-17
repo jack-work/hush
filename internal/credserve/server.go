@@ -171,7 +171,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			}
 			current, err = s.mgr.Lease(name)
 		}
-		if err != nil || (s.cfg.Instances[name].Kind == KindChatGPT && (!oauth.ValidAccountID(current.AccountID) || current.Config != s.cfg.Instances[name].OAuthConfig(name))) {
+		if err != nil || s.pinnedStale(name, current) {
 			writeCredentialFailure(w, name, err)
 			return
 		}
@@ -206,7 +206,7 @@ func (s *Server) answer(w http.ResponseWriter, name string) {
 		writeCredentialFailure(w, name, err)
 		return
 	}
-	if err == nil && s.cfg.Instances[name].Kind == KindChatGPT && (!oauth.ValidAccountID(lease.AccountID) || lease.Config != s.cfg.Instances[name].OAuthConfig(name)) {
+	if err == nil && s.pinnedStale(name, lease) {
 		writeStale(w, name)
 		return
 	}
@@ -232,7 +232,7 @@ func (s *Server) answer(w http.ResponseWriter, name string) {
 		writeError(w, http.StatusServiceUnavailable, "refresh_failing", "token expired and the refresh has not succeeded")
 		return
 	}
-	if s.cfg.Instances[name].Kind == KindChatGPT && (!oauth.ValidAccountID(lease.AccountID) || lease.Config != s.cfg.Instances[name].OAuthConfig(name)) {
+	if s.pinnedStale(name, lease) {
 		writeStale(w, name)
 		return
 	}
@@ -244,6 +244,17 @@ func (s *Server) answer(w http.ResponseWriter, name string) {
 		ExpiresAt int64  `json:"expires_at"`
 		AccountID string `json:"account_id,omitempty"`
 	}{name, lease.AccessToken, lease.ExpiresAt.Unix(), lease.AccountID})
+}
+
+func (s *Server) pinnedStale(name string, l oauth.Lease) bool {
+	in := s.cfg.Instances[name]
+	switch in.Kind {
+	case KindChatGPT:
+		return !oauth.ValidAccountID(l.AccountID) || l.Config != in.OAuthConfig(name)
+	case KindAnthropic:
+		return l.Config != in.OAuthConfig(name)
+	}
+	return false
 }
 
 func (s *Server) due(l oauth.Lease) bool {

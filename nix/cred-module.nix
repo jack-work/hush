@@ -182,6 +182,11 @@ in
     };
 
     egress = {
+      fence = mkOption {
+        type = types.bool;
+        default = true;
+        description = "Confine the minter's uid to DNS and the resolved token endpoints (nftables). Needs a dnsmasq that fills the sets (egress.dnsmasq); turn it off on a host without one, or the minter reaches nothing.";
+      };
       resolvers = mkOption {
         type = types.listOf types.str;
         default = [ "127.0.0.1" ];
@@ -250,11 +255,11 @@ in
       (pkgs.writeShellScriptBin "hush-cred" ''exec ${hush} cred "$@"'')
     ];
 
-    services.dnsmasq.settings.nftset = lib.mkIf cfg.egress.dnsmasq [
+    services.dnsmasq.settings.nftset = lib.mkIf (cfg.egress.fence && cfg.egress.dnsmasq) [
       "/${lib.concatStringsSep "/" egressHosts}/4#inet#${table}#allow4,6#inet#${table}#allow6"
     ];
 
-    systemd.services.hush-cred-fence = {
+    systemd.services.hush-cred-fence = lib.mkIf cfg.egress.fence {
       description = "the hush-cred egress fence: uid ${toString cfg.uid} reaches DNS and resolved token endpoints only";
       wantedBy = [ "multi-user.target" ];
       before = [ "hush-cred.service" "dnsmasq.service" ];
@@ -284,8 +289,8 @@ in
     in {
       description = "hush cred serve: plan credentials for ${who}";
       wantedBy = [ "multi-user.target" ];
-      requires = sockets ++ [ "hush-cred-fence.service" ];
-      after = sockets ++ [ "hush-cred-fence.service" "network-online.target" "dnsmasq.service" ];
+      requires = sockets ++ lib.optional cfg.egress.fence "hush-cred-fence.service";
+      after = sockets ++ lib.optional cfg.egress.fence "hush-cred-fence.service" ++ [ "network-online.target" "dnsmasq.service" ];
       wants = [ "network-online.target" ];
       restartTriggers = [ configFile ];
       serviceConfig = {

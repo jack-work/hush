@@ -237,7 +237,7 @@ func reloginError(cfg Config, reason string) error {
 }
 
 func reloginCommand(cfg Config) string {
-	if cfg.Grant == GrantChatGPT {
+	if cfg.Grant == GrantChatGPT || cfg.Grant == GrantAnthropic {
 		return "hush cred login " + cfg.Name
 	}
 	if cfg.Grant == "" || cfg.Grant == GrantRefreshToken {

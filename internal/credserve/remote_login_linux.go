@@ -18,10 +18,10 @@ import (
 )
 
 type remoteLogin struct {
-	handle, verifier string
-	expires          time.Time
-	completing       bool
-	timer            *time.Timer
+	handle, verifier, state string
+	expires                 time.Time
+	completing              bool
+	timer                   *time.Timer
 }
 
 func controlBody(r *http.Request, target any, empty bool) bool {
@@ -59,7 +59,7 @@ func (s *Server) loginRoute(w http.ResponseWriter, r *http.Request) bool {
 	prefix := "/login-" + action + "/"
 	name := strings.TrimPrefix(r.URL.Path, prefix)
 	in, ok := s.cfg.Instances[name]
-	if !ok || name == "" || strings.Contains(name, "/") || in.Kind != KindChatGPT {
+	if !ok || name == "" || strings.Contains(name, "/") || in.Kind != KindChatGPT && in.Kind != KindAnthropic {
 		writeError(w, 404, "unknown_credential", "no such credential")
 		return true
 	}
@@ -134,7 +134,7 @@ func (s *Server) startLogin(w http.ResponseWriter, name string, in Instance) {
 		writeError(w, 503, "login_failed", "login failed")
 		return
 	}
-	pending := &remoteLogin{handle: handle, verifier: pkce.Verifier, expires: s.Now().Add(5 * time.Minute)}
+	pending := &remoteLogin{handle: handle, verifier: pkce.Verifier, state: state, expires: s.Now().Add(5 * time.Minute)}
 	if s.pending == nil {
 		s.pending = map[string]*remoteLogin{}
 	}
@@ -147,9 +147,13 @@ func (s *Server) startLogin(w http.ResponseWriter, name string, in Instance) {
 			s.mgr.CancelLogin(name)
 		}
 	})
-	q := url.Values{"client_id": {oauth.ChatGPTClientID}, "redirect_uri": {oauth.ChatGPTRedirectURI}, "response_type": {"code"}, "scope": {oauth.ChatGPTScopes}, "code_challenge": {pkce.Challenge}, "code_challenge_method": {"S256"}, "state": {state}, "id_token_add_organizations": {"true"}, "codex_cli_simplified_flow": {"true"}, "originator": {"codex_cli_rs"}, "prompt": {"login"}}
+	authorize := anthropicAuthorizeURL(pkce, state)
+	if in.Kind == KindChatGPT {
+		q := url.Values{"client_id": {oauth.ChatGPTClientID}, "redirect_uri": {oauth.ChatGPTRedirectURI}, "response_type": {"code"}, "scope": {oauth.ChatGPTScopes}, "code_challenge": {pkce.Challenge}, "code_challenge_method": {"S256"}, "state": {state}, "id_token_add_organizations": {"true"}, "codex_cli_simplified_flow": {"true"}, "originator": {"codex_cli_rs"}, "prompt": {"login"}}
+		authorize = oauth.ChatGPTAuthorizeURL + "?" + q.Encode()
+	}
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]any{"status": "started", "authorize_url": oauth.ChatGPTAuthorizeURL + "?" + q.Encode(), "handle": handle})
+	json.NewEncoder(w).Encode(map[string]any{"status": "started", "authorize_url": authorize, "handle": handle})
 }
 
 func (s *Server) completeLogin(w http.ResponseWriter, r *http.Request, name string, in Instance, handle, code string) {
@@ -159,6 +163,16 @@ func (s *Server) completeLogin(w http.ResponseWriter, r *http.Request, name stri
 		s.mu.Unlock()
 		writeError(w, 400, "invalid_session", "login session invalid")
 		return
+	}
+	state := ""
+	if in.Kind == KindAnthropic {
+		var found bool
+		code, state, found = strings.Cut(strings.TrimSpace(code), "#")
+		if !found || code == "" || state == "" || strings.ContainsAny(code+state, " \t\r\n\x00") || subtle.ConstantTimeCompare([]byte(state), []byte(pending.state)) != 1 {
+			s.mu.Unlock()
+			writeError(w, 400, "invalid_login", "login refused")
+			return
+		}
 	}
 	pending.completing = true
 	pending.timer.Stop()
@@ -172,7 +186,13 @@ func (s *Server) completeLogin(w http.ResponseWriter, r *http.Request, name stri
 	}()
 	ctx, cancel := context.WithTimeout(r.Context(), 45*time.Second)
 	defer cancel()
-	if err := s.mgr.CompleteChatGPTLogin(ctx, in.OAuthConfig(name), code, pending.verifier); err != nil {
+	var err error
+	if in.Kind == KindAnthropic {
+		err = s.mgr.CompleteAnthropicLogin(ctx, in.OAuthConfig(name), code, state, pending.verifier)
+	} else {
+		err = s.mgr.CompleteChatGPTLogin(ctx, in.OAuthConfig(name), code, pending.verifier)
+	}
+	if err != nil {
 		writeOperationError(w, name, err)
 		return
 	}

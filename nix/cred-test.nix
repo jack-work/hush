@@ -189,8 +189,11 @@ pkgs.testers.runNixOSTest {
         assert doc["token"] == "at-login-1", doc
 
     with subtest("principal socket: 0600 hush-cred plus a uid ACL, its grant only"):
-        minter.succeed("test \"$(stat -c '%U %a' /run/hush-cred/keel.sock)\" = 'hush-cred 600'")
-        minter.succeed("getfacl -p /run/hush-cred/keel.sock | grep -qx 'user:outsider:rw-'")
+        # 0600 plus one named-user entry: stat shows the ACL mask in the group bits, so read the ACL itself.
+        minter.succeed("test \"$(stat -c '%U' /run/hush-cred/keel.sock)\" = 'hush-cred'")
+        acl = minter.succeed("getfacl -p /run/hush-cred/keel.sock")
+        for line in ["user::rw-", "user:outsider:rw-", "group::---", "other::---"]:
+            assert line in acl.splitlines(), acl
         out = minter.succeed("runuser -u outsider -- curl -s --unix-socket /run/hush-cred/keel.sock http://m/cred/anthropic-work")
         replies.append(out)
         assert json.loads(out)["token"] == "at-login-1", out

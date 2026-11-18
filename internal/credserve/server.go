@@ -130,17 +130,15 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.serveStatus(w, r)
 		return
 	}
-	refresh := strings.HasPrefix(r.URL.Path, "/refresh/")
-	prefix := "/cred/"
-	if refresh {
-		prefix = "/refresh/"
+	if s.refreshRoute(w, r) {
+		return
 	}
-	name, found := strings.CutPrefix(r.URL.Path, prefix)
+	name, found := strings.CutPrefix(r.URL.Path, "/cred/")
 	if !found || name == "" || strings.Contains(name, "/") {
 		writeError(w, http.StatusNotFound, "not_found", "GET /cred/<name>")
 		return
 	}
-	if (!refresh && r.Method != http.MethodGet) || (refresh && r.Method != http.MethodPost) {
+	if r.Method != http.MethodGet {
 		writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "GET only")
 		return
 	}
@@ -148,52 +146,69 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "unknown_credential", "no such credential")
 		return
 	}
-	if refresh {
-		if r.URL.RawQuery != "" || !controlBody(r, &struct{}{}, true) {
-			writeError(w, 400, "invalid_request", "invalid request")
-			return
-		}
-		if s.cfg.Instances[name].Kind == KindExec {
-			s.refreshExec(w, name)
-			return
-		}
-		finish, performed, err := s.beginRemoteRefresh(name)
-		if err != nil {
-			writeOperationError(w, name, err)
-			return
-		}
-		defer finish()
-		current, err := s.mgr.Lease(name)
-		if errors.Is(err, oauth.ErrNotFound) {
-			if adoptErr := s.mgr.Adopt(name); adoptErr != nil {
-				writeCredentialFailure(w, name, adoptErr)
-				return
-			}
-			current, err = s.mgr.Lease(name)
-		}
-		if err != nil || (s.cfg.Instances[name].Kind == KindChatGPT && (!oauth.ValidAccountID(current.AccountID) || current.Config != s.cfg.Instances[name].OAuthConfig(name))) {
-			writeCredentialFailure(w, name, err)
-			return
-		}
-		var refreshErr error
-		if performed {
-			_, refreshErr = s.mgr.TryRefresh(name)
-		}
-		if refreshErr != nil {
-			writeOperationError(w, name, refreshErr)
-			return
-		}
-		l, err := s.mgr.Lease(name)
-		if err != nil || l.SignInNeeded || l.ExpiresAt.Sub(s.Now()) < serveFloor {
-			writeCredentialFailure(w, name, err)
-			return
-		}
-		w.Header().Set("Content-Type", "application/json")
-		w.Header().Set("Cache-Control", "no-store")
-		json.NewEncoder(w).Encode(map[string]any{"ready": true, "refreshed": performed})
-		return
-	}
 	s.answer(w, name)
+}
+
+func (s *Server) refreshRoute(w http.ResponseWriter, r *http.Request) bool {
+	name, found := strings.CutPrefix(r.URL.Path, "/refresh/")
+	if !found {
+		return false
+	}
+	if name == "" || strings.Contains(name, "/") {
+		writeError(w, http.StatusNotFound, "not_found", "POST /refresh/<name>")
+		return true
+	}
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "POST only")
+		return true
+	}
+	if _, ok := s.cfg.Instances[name]; !ok {
+		writeError(w, http.StatusNotFound, "unknown_credential", "no such credential")
+		return true
+	}
+	if r.URL.RawQuery != "" || !controlBody(r, &struct{}{}, true) {
+		writeError(w, 400, "invalid_request", "invalid request")
+		return true
+	}
+	if s.cfg.Instances[name].Kind == KindExec {
+		s.refreshExec(w, name)
+		return true
+	}
+	finish, performed, err := s.beginRemoteRefresh(name)
+	if err != nil {
+		writeOperationError(w, name, err)
+		return true
+	}
+	defer finish()
+	current, err := s.mgr.Lease(name)
+	if errors.Is(err, oauth.ErrNotFound) {
+		if adoptErr := s.mgr.Adopt(name); adoptErr != nil {
+			writeCredentialFailure(w, name, adoptErr)
+			return true
+		}
+		current, err = s.mgr.Lease(name)
+	}
+	if err != nil || (s.cfg.Instances[name].Kind == KindChatGPT && (!oauth.ValidAccountID(current.AccountID) || current.Config != s.cfg.Instances[name].OAuthConfig(name))) {
+		writeCredentialFailure(w, name, err)
+		return true
+	}
+	var refreshErr error
+	if performed {
+		_, refreshErr = s.mgr.TryRefresh(name)
+	}
+	if refreshErr != nil {
+		writeOperationError(w, name, refreshErr)
+		return true
+	}
+	l, err := s.mgr.Lease(name)
+	if err != nil || l.SignInNeeded || l.ExpiresAt.Sub(s.Now()) < serveFloor {
+		writeCredentialFailure(w, name, err)
+		return true
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "no-store")
+	json.NewEncoder(w).Encode(map[string]any{"ready": true, "refreshed": performed})
+	return true
 }
 
 func (s *Server) answer(w http.ResponseWriter, name string) {

@@ -45,12 +45,14 @@ type Instance struct {
 // Principal is one caller identity with its own socket. Who may open the
 // socket is the grant: SO_PEERCRED must name one of Users, and the socket
 // serves only the instances in Credentials. Login lets the principal use
-// the remote sign-in routes as well.
+// the remote sign-in routes as well, and Refresh POST /refresh/<name>, which
+// answers status and never a token.
 type Principal struct {
 	Users       []string `toml:"users"`
 	Credentials []string `toml:"credentials"`
 	Socket      string   `toml:"socket"`
 	Login       bool     `toml:"login"`
+	Refresh     bool     `toml:"refresh"`
 }
 
 type Config struct {
@@ -128,7 +130,7 @@ func (p Principal) validate(name string, instances map[string]Instance) error {
 			return fail("an empty user")
 		}
 	}
-	if len(p.Credentials) == 0 && !p.Login {
+	if len(p.Credentials) == 0 && !p.Login && !p.Refresh {
 		return fail("credentials is required")
 	}
 	for _, cred := range p.Credentials {

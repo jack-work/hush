@@ -76,6 +76,11 @@ let
         default = false;
         description = "Allow the remote sign-in routes on this socket too.";
       };
+      refresh = mkOption {
+        type = types.bool;
+        default = false;
+        description = "Allow POST /refresh/<name> on this socket too. It answers status, never a token.";
+      };
       socketPath = mkOption {
         type = types.str;
         default = "${L.runDir}/${name}.sock";
@@ -150,10 +155,10 @@ let
     L = layouts.hush;
     builtin =
       lib.optionalAttrs (hushCfg.credUsers != [ ]) {
-        cred = { users = hushCfg.credUsers; credentials = lib.attrNames hushCfg.instances; login = false; socketPath = hushCfg.socketPath; };
+        cred = { users = hushCfg.credUsers; credentials = lib.attrNames hushCfg.instances; login = false; refresh = false; socketPath = hushCfg.socketPath; };
       }
       // lib.optionalAttrs (hushCfg.dropUsers != [ ]) {
-        drop = { users = hushCfg.dropUsers; credentials = [ ]; login = true; socketPath = hushCfg.dropSocketPath; };
+        drop = { users = hushCfg.dropUsers; credentials = [ ]; login = true; refresh = true; socketPath = hushCfg.dropSocketPath; };
       };
   in {
     owner = { user = L.user; path = hushCfg.adminSocketPath; group = L.user; mode = "0600"; unit = L.socketUnit "admin"; fdName = "admin"; };
@@ -175,7 +180,7 @@ let
       users = p.users;
       credentials = p.credentials;
       socket = p.socketPath;
-    } // lib.optionalAttrs p.login { login = true; };
+    } // lib.optionalAttrs p.login { login = true; } // lib.optionalAttrs p.refresh { refresh = true; };
 
     instanceToml = i: lib.filterAttrs (_: v: v != null && v != "" && v != false) {
       kind = i.kind;
@@ -406,8 +411,8 @@ in
       type = types.listOf types.str;
       default = [ ];
       description = ''
-        Users who may sign an instance in on the drop box (POST /login-start/<name>, /login-complete/<name>). The drop
-        box answers status, never a token. Empty: no drop box.
+        Users who may sign an instance in or refresh it on the drop box (POST /login-start/<name>,
+        /login-complete/<name>, /refresh/<name>). The drop box answers status, never a token. Empty: no drop box.
       '';
     };
 

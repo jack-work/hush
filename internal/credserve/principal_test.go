@@ -275,4 +275,33 @@ client_id = "Iv1.x"
 	if _, err := ParseConfig([]byte(base + inst + "[principals.p]\nusers = [\"x\"]\ncredentials = [\"a\"]\nsocket = \"/run/band-cred/p.sock\"\n")); err != nil {
 		t.Fatalf("a principal-only config must parse: %v", err)
 	}
+	if _, err := ParseConfig([]byte(base + inst + "[principals.p]\nusers = [\"x\"]\nrefresh = true\nsocket = \"/run/band-cred/p.sock\"\n")); err != nil {
+		t.Fatalf("a refresh-only principal must parse: %v", err)
+	}
+}
+
+func TestRefreshPrincipalGetsStatusNeverAToken(t *testing.T) {
+	p := newPrincipalRig(t, "", `
+[principals.drop]
+users = ["me"]
+login = true
+refresh = true
+`)
+	a := p.request("drop", http.MethodPost, "/refresh/"+instName)
+	if a.status != 200 || strings.TrimSpace(a.raw) != `{"ready":true,"refreshed":true}` {
+		t.Fatalf("refresh on a refresh principal: got %d %q", a.status, a.raw)
+	}
+	a = p.request("drop", http.MethodPost, "/refresh/"+instName)
+	if a.status != 200 || strings.TrimSpace(a.raw) != `{"ready":true,"refreshed":false}` {
+		t.Fatalf("second refresh inside the floor: got %d %q", a.status, a.raw)
+	}
+	for _, c := range [][2]string{{http.MethodGet, "/cred/" + instName}, {http.MethodGet, "/refresh/" + instName}, {http.MethodPost, "/refresh/no-such-credential"}} {
+		a := p.request("drop", c[0], c[1])
+		if a.status == 200 || a.Token != "" || strings.Contains(a.raw, "at-") {
+			t.Fatalf("%s %s on a refresh principal: got %d %q", c[0], c[1], a.status, a.raw)
+		}
+	}
+	if strings.Contains(p.logs.String(), "at-") {
+		t.Fatalf("a token reached the log: %q", p.logs.String())
+	}
 }

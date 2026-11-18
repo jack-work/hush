@@ -1,100 +1,27 @@
 { pkgs, self }:
 let
-  recipient = "age1q420hq4mgxjlq2nw589e8hehfv3c6ld32z772qldwwlsvg89yqlqcgq8rd";
-  forbiddenIP = "192.168.1.50";
-
-  certs = pkgs.runCommand "hush-cred-test-certs" { nativeBuildInputs = [ pkgs.openssl ]; } ''
-    mkdir $out
-    openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes -days 3650 \
-      -subj /CN=test-ca -keyout ca.key -out $out/ca.pem
-    openssl req -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes \
-      -subj /CN=tokens.test -keyout $out/leaf.key -out leaf.csr
-    printf 'subjectAltName=DNS:tokens.test,DNS:forbidden.test,IP:${forbiddenIP}\n' > ext
-    openssl x509 -req -in leaf.csr -CA $out/ca.pem -CAkey ca.key -CAcreateserial \
-      -days 3650 -extfile ext -out $out/leaf.pem
-  '';
-
-  ptyLogin = pkgs.writeText "pty-login.py" ''
-    import os, pty, re, sys
-    pid, fd = pty.fork()
-    if pid == 0:
-        os.execvp("runuser", ["runuser", "-u", "hush-cred", "--", "hush-cred", "login", "anthropic-work"])
-    buf = b""
-    while b"code#state: " not in buf:
-        try:
-            chunk = os.read(fd, 4096)
-        except OSError:  # Linux: EIO once the child side closes; that is EOF
-            chunk = b""
-        if not chunk:
-            _, st = os.waitpid(pid, 0)
-            sys.stdout.write(buf.decode(errors="replace") + f"\n[login exited before the prompt: status {os.waitstatus_to_exitcode(st)}]\n")
-            sys.exit(2)
-        buf += chunk
-    state = re.search(rb"state=([A-Za-z0-9_-]+)", buf).group(1).decode()
-    os.write(fd, f"the-code#{state}\n".encode())
-    out = b""
-    while True:
-        try:
-            chunk = os.read(fd, 4096)
-        except OSError:
-            break
-        if not chunk:
-            break
-        out += chunk
-    _, status = os.waitpid(pid, 0)
-    sys.stdout.write((buf + out).decode(errors="replace"))
-    sys.exit(os.waitstatus_to_exitcode(status))
-  '';
+  common = import ./cred-test-common.nix { inherit pkgs; };
+  inherit (common) recipient forbiddenIP ptyLogin;
 in
 pkgs.testers.runNixOSTest {
-  name = "hush-cred";
+  name = "hush";
 
-  nodes.endpoint = { nodes, ... }: {
-    networking.interfaces.eth1.ipv4.addresses = [{ address = forbiddenIP; prefixLength = 24; }];
-    networking.firewall.allowedTCPPorts = [ 443 ];
-    networking.firewall.allowedUDPPorts = [ 53 ];
-    services.dnsmasq = {
-      enable = true;
-      resolveLocalQueries = false;
-      settings = {
-        no-resolv = true;
-        address = [
-          "/tokens.test/${nodes.endpoint.networking.primaryIPAddress}"
-          "/forbidden.test/${forbiddenIP}"
-        ];
-      };
-    };
-    systemd.services.fake-endpoint = {
-      wantedBy = [ "multi-user.target" ];
-      serviceConfig.ExecStart = "${pkgs.python3}/bin/python3 ${./cred-fake-endpoint.py} ${certs}/leaf.pem ${certs}/leaf.key";
-    };
-  };
+  nodes.endpoint = common.endpoint;
 
   nodes.minter = { nodes, ... }: {
-    imports = [ self.nixosModules.hush-cred ];
-    security.pki.certificateFiles = [ "${certs}/ca.pem" ];
-    environment.systemPackages = [ pkgs.curl pkgs.restic pkgs.nftables pkgs.acl ];
-    networking.nameservers = pkgs.lib.mkForce [ "127.0.0.1" ];
-    services.dnsmasq = {
-      enable = true;
-      settings = {
-        no-resolv = true;
-        server = [ nodes.endpoint.networking.primaryIPAddress ];
-        listen-address = [ "127.0.0.1" ];
-        bind-interfaces = true;
-      };
-    };
-
-    users.users.rou2 = { isSystemUser = true; group = "rou2"; };
-    users.users.intruder = { isSystemUser = true; group = "intruder"; extraGroups = [ "rou2" ]; };
+    imports = [ self.nixosModules.hush common.minterBase ];
+    users.users.figaro = { isSystemUser = true; group = "figaro"; };
+    users.groups.figaro = { };
+    users.users.jack = { isNormalUser = true; };
+    users.users.intruder = { isSystemUser = true; group = "intruder"; extraGroups = [ "figaro" "hush" ]; };
     users.groups.intruder = { };
     users.users.outsider = { isSystemUser = true; group = "outsider"; };
     users.groups.outsider = { };
 
-    environment.etc."hush-cred-test/identity" = { source = ./cred-test-identity.txt; mode = "0400"; };
-
-    services.hush-cred = {
+    # credUsers is left at its default, [ "figaro" ].
+    services.hush = {
       enable = true;
+      dropUsers = [ "jack" ];
       inherit recipient;
       identityFile = "/etc/hush-cred-test/identity";
       instances.anthropic-work = {
@@ -106,7 +33,8 @@ pkgs.testers.runNixOSTest {
         scopes = "user:inference";
         audit = true;
       };
-      # A principal with its own socket: outsider (not in group rou2) may read anthropic-work there and nothing else.
+      instances.chatgpt-personal.kind = "chatgpt";
+      # A principal with its own socket: outsider may read anthropic-work there and nothing else.
       principals.keel = { users = [ "outsider" ]; credentials = [ "anthropic-work" ]; };
     };
 
@@ -134,7 +62,7 @@ pkgs.testers.runNixOSTest {
 
     def cred(user, expect_status=None):
         out = minter.succeed(
-            f"runuser -u {user} -- curl -s -w '\\n%{{http_code}}' --unix-socket /run/hush-cred/cred.sock http://m/cred/anthropic-work"
+            f"runuser -u {user} -- curl -s -w '\\n%{{http_code}}' --unix-socket /run/hush/cred.sock http://m/cred/anthropic-work"
         )
         body, status = out.rsplit("\n", 1)
         replies.append(body)
@@ -152,70 +80,127 @@ pkgs.testers.runNixOSTest {
     endpoint.wait_for_unit("fake-endpoint.service")
     endpoint.wait_for_unit("dnsmasq.service")
     endpoint.wait_for_open_port(443)
-    for u in ["hush-cred-fence.service", "dnsmasq.service", "hush-cred.socket", "hush-cred-keel.socket", "hush-cred.service", "local-http.service"]:
+    for u in ["hush-fence.service", "dnsmasq.service", "hush-cred.socket", "hush-drop.socket", "hush-admin.socket", "hush-keel.socket", "hush.service", "local-http.service"]:
         minter.wait_for_unit(u)
     minter.wait_for_open_port(8080)
 
-    with subtest("socket is the minter's, group rou2, 0660"):
-        minter.succeed("test \"$(stat -c '%U %G %a' /run/hush-cred/cred.sock)\" = 'hush-cred rou2 660'")
+    with subtest("sockets: 0600 hush, each opened to its users by a uid ACL only"):
+        for sock, user in [("cred", "figaro"), ("drop", "jack"), ("admin", None)]:
+            path = f"/run/hush/{sock}.sock"
+            minter.succeed(f"test \"$(stat -c '%U %G' {path})\" = 'hush hush'")
+            acl = minter.succeed(f"getfacl -p {path}").splitlines()
+            for line in ["user::rw-", "group::---", "other::---"]:
+                assert line in acl, (path, acl)
+            named = [l for l in acl if l.startswith("user:") and not l.startswith("user::")]
+            assert named == ([f"user:{user}:rw-"] if user else []), (path, acl)
+        minter.succeed("test \"$(id -u hush)\" = 476")
+        minter.fail("id hush-cred")
 
     with subtest("(iii) the egress fence: DNS and resolved token endpoints only"):
         minter.succeed("curl -sf --max-time 5 https://forbidden.test/")
         minter.succeed("curl -sf --max-time 5 http://127.0.0.1:8080/")
-        minter.succeed("runuser -u hush-cred -- curl -sf --max-time 5 https://tokens.test/")
-        minter.fail("runuser -u hush-cred -- curl -sf --max-time 5 https://forbidden.test/")
-        minter.fail("runuser -u hush-cred -- curl -sf --max-time 5 https://${forbiddenIP}/")
-        minter.fail("runuser -u hush-cred -- curl -sf --max-time 5 http://127.0.0.1:8080/")
-        minter.succeed("nft list set inet hush_cred allow4 | grep -q ${nodes.endpoint.networking.primaryIPAddress}")
-        minter.fail("nft list set inet hush_cred allow4 | grep -q ${forbiddenIP}")
+        minter.succeed("runuser -u hush -- curl -sf --max-time 5 https://tokens.test/")
+        minter.fail("runuser -u hush -- curl -sf --max-time 5 https://forbidden.test/")
+        minter.fail("runuser -u hush -- curl -sf --max-time 5 https://${forbiddenIP}/")
+        minter.fail("runuser -u hush -- curl -sf --max-time 5 http://127.0.0.1:8080/")
+        minter.succeed("nft list set inet hush allow4 | grep -q ${nodes.endpoint.networking.primaryIPAddress}")
+        minter.fail("nft list set inet hush allow4 | grep -q ${forbiddenIP}")
 
     with subtest("before sign-in: sign-in needed"):
-        status, doc = cred("rou2", 503)
+        status, doc = cred("figaro", 503)
         assert doc["reason"] == "sign-in needed", doc
 
     with subtest("(v) login refuses a piped code"):
-        out = minter.fail("echo 'the-code#x' | runuser -u hush-cred -- hush-cred login anthropic-work 2>&1")
+        out = minter.fail("echo 'the-code#x' | runuser -u hush -- hush-cred login anthropic-work 2>&1")
         assert "not a terminal" in out, out
         assert count("logins") == 0
 
     with subtest("(v) login reads code#state from the terminal"):
         fake("login_expires_in", 35)
         # login refuses while `cred serve` owns the state (.credential-owner.lock): stop the owner first, as an operator would.
-        minter.succeed("systemctl stop hush-cred.socket hush-cred-keel.socket hush-cred.service")
-        print(minter.succeed("${pkgs.python3}/bin/python3 ${ptyLogin}"))
-        minter.succeed("systemctl start hush-cred.socket hush-cred-keel.socket")
+        minter.succeed("systemctl stop hush-cred.socket hush-drop.socket hush-admin.socket hush-keel.socket hush.service")
+        print(minter.succeed("${pkgs.python3}/bin/python3 ${ptyLogin} hush"))
+        minter.succeed("systemctl start hush-cred.socket hush-drop.socket hush-admin.socket hush-keel.socket")
         assert count("logins") == 1
-        status, doc = cred("rou2", 200)
+        status, doc = cred("figaro", 200)
         assert doc["token"] == "at-login-1", doc
 
-    with subtest("principal socket: 0600 hush-cred plus a uid ACL, its grant only"):
+    with subtest("principal socket: 0600 hush plus a uid ACL, its grant only"):
         # 0600 plus one named-user entry: stat shows the ACL mask in the group bits, so read the ACL itself.
-        minter.succeed("test \"$(stat -c '%U' /run/hush-cred/keel.sock)\" = 'hush-cred'")
-        acl = minter.succeed("getfacl -p /run/hush-cred/keel.sock")
+        minter.succeed("test \"$(stat -c '%U' /run/hush/keel.sock)\" = 'hush'")
+        acl = minter.succeed("getfacl -p /run/hush/keel.sock")
         for line in ["user::rw-", "user:outsider:rw-", "group::---", "other::---"]:
             assert line in acl.splitlines(), acl
-        out = minter.succeed("runuser -u outsider -- curl -s --unix-socket /run/hush-cred/keel.sock http://m/cred/anthropic-work")
+        out = minter.succeed("runuser -u outsider -- curl -s --unix-socket /run/hush/keel.sock http://m/cred/anthropic-work")
         replies.append(out)
         assert json.loads(out)["token"] == "at-login-1", out
-        out = minter.succeed("runuser -u outsider -- curl -s -w '\n%{http_code}' --unix-socket /run/hush-cred/keel.sock http://m/cred/not-granted")
+        out = minter.succeed("runuser -u outsider -- curl -s -w '\n%{http_code}' --unix-socket /run/hush/keel.sock http://m/cred/not-granted")
         body, status = out.rsplit("\n", 1)
         assert status == "403" and json.loads(body)["error"] == "not_granted", out
-        minter.fail("runuser -u rou2 -- curl -sf --unix-socket /run/hush-cred/keel.sock http://m/cred/anthropic-work")
-        journal = minter.succeed("journalctl -u hush-cred.service -o cat --no-pager")
+        minter.fail("runuser -u figaro -- curl -sf --unix-socket /run/hush/keel.sock http://m/cred/anthropic-work")
+        journal = minter.succeed("journalctl -u hush.service -o cat --no-pager")
         assert "cred: audit anthropic-work principal=keel" in journal, journal
         assert "at-login-1" not in journal, "a token reached the journal"
 
-    with subtest("peer credentials: a group member that is not rou2 is refused"):
-        status, doc = cred("intruder", 403)
+    def call(user, sock, method, path, body=None):
+        data = f" -H 'Content-Type: application/json' -d '{body}'" if body is not None else ""
+        out = minter.succeed(
+            f"runuser -u {user} -- curl -s -X {method}{data} -w '\\n%{{http_code}}' --unix-socket /run/hush/{sock}.sock http://m{path}"
+        )
+        body, status = out.rsplit("\n", 1)
+        replies.append(body)
+        return int(status), json.loads(body)
+
+    with subtest("cred socket: figaro's uid only; groups and other uids are refused"):
+        status, doc = cred("figaro", 200)
+        assert doc["token"] == "at-login-1", doc
+        for user in ["intruder", "outsider", "jack"]:
+            minter.fail(f"runuser -u {user} -- curl -s --unix-socket /run/hush/cred.sock http://m/cred/anthropic-work")
+        # root passes the file mode; the SO_PEERCRED check in the server refuses it.
+        status, doc = cred("root", 403)
         assert "token" not in doc, doc
-        minter.fail("runuser -u outsider -- curl -sf --unix-socket /run/hush-cred/cred.sock http://m/cred/anthropic-work")
+        status, doc = call("figaro", "cred", "GET", "/status")
+        assert status == 404 and "token" not in doc, doc
+        status, doc = call("figaro", "cred", "POST", "/login-start/chatgpt-personal", "{}")
+        assert status == 404, doc
+
+    with subtest("drop box: a drop user starts a sign-in and can read nothing back"):
+        status, doc = call("jack", "drop", "POST", "/login-start/chatgpt-personal", "{}")
+        assert status == 200 and doc["status"] == "started", doc
+        assert sorted(doc) == ["authorize_url", "handle", "status"], doc
+        assert doc["authorize_url"].startswith("https://auth.openai.com/oauth/authorize?"), doc
+        status, doc = call("jack", "drop", "POST", "/login-complete/chatgpt-personal", '{"handle":"not-the-handle","code":"c"}')
+        assert status == 400 and doc["error"] == "invalid_session", doc
+        for name in ["anthropic-work", "chatgpt-personal"]:
+            status, doc = call("jack", "drop", "GET", f"/cred/{name}")
+            assert status == 403 and doc["error"] == "not_granted" and "token" not in doc, doc
+        status, doc = call("jack", "drop", "GET", "/status")
+        assert status == 404, doc
+        status, doc = call("jack", "drop", "POST", "/refresh/anthropic-work", "{}")
+        assert status == 404, doc
+        for user in ["figaro", "intruder", "outsider"]:
+            minter.fail(f"runuser -u {user} -- curl -s --unix-socket /run/hush/drop.sock http://m/status")
+        status, doc = call("root", "drop", "POST", "/login-start/chatgpt-personal", "{}")
+        assert status == 403, doc
+
+    with subtest("admin socket: the hush uid reads status; nobody else"):
+        status, doc = call("hush", "admin", "GET", "/status")
+        assert status == 200, doc
+        # The 35 s sign-in token is inside the serve floor by now, and /status never refreshes: "failing" is the honest state.
+        assert doc["anthropic-work"]["state"] in ("ok", "failing") and doc["anthropic-work"]["expires_at"] > 0, doc
+        assert doc["chatgpt-personal"]["state"] == "unminted", doc
+        assert "token" not in json.dumps(doc), doc
+        for user in ["figaro", "jack", "intruder"]:
+            minter.fail(f"runuser -u {user} -- curl -s --unix-socket /run/hush/admin.sock http://m/status")
+        status, doc = call("root", "admin", "GET", "/status")
+        assert status == 403, doc
 
     with subtest("(ii) N concurrent calls during a refresh cost one POST"):
         fake("mode", "slow")
         fake("expires_in", 45)
         time.sleep(6)
         minter.succeed(
-            "for i in $(seq 20); do runuser -u rou2 -- curl -s --unix-socket /run/hush-cred/cred.sock "
+            "for i in $(seq 20); do runuser -u figaro -- curl -s --unix-socket /run/hush/cred.sock "
             "http://m/cred/anthropic-work > /tmp/r$i & done; wait"
         )
         assert count("posts") == 1, count("posts")
@@ -228,19 +213,19 @@ pkgs.testers.runNixOSTest {
         fake("mode", "ok")
         time.sleep(16)
         for _ in range(20):
-            cred("rou2")
+            cred("figaro")
         assert count("posts") == 1, count("posts")
 
     with subtest("persist-before-use: killed between the POST and the write"):
         fake("mode", "hang")
-        minter.succeed("systemctl restart hush-cred.service")
-        minter.succeed("setsid sh -c 'runuser -u rou2 -- curl -s --max-time 30 --unix-socket /run/hush-cred/cred.sock http://m/cred/anthropic-work > /tmp/killed 2>&1' >/dev/null 2>&1 < /dev/null &")
+        minter.succeed("systemctl restart hush.service")
+        minter.succeed("setsid sh -c 'runuser -u figaro -- curl -s --max-time 30 --unix-socket /run/hush/cred.sock http://m/cred/anthropic-work > /tmp/killed 2>&1' >/dev/null 2>&1 < /dev/null &")
         endpoint.wait_until_succeeds("test $(cat /run/fake/posts) = 2")
-        minter.succeed("systemctl kill -s KILL hush-cred.service")
+        minter.succeed("systemctl kill -s KILL hush.service")
         fake("mode", "ok")
         fake("expires_in", 34)
-        minter.succeed("systemctl restart hush-cred.service")
-        status, doc = cred("rou2", 200)
+        minter.succeed("systemctl restart hush.service")
+        status, doc = cred("figaro", 200)
         assert doc["token"] == "at-3", doc
         last = endpoint.succeed("cat /run/fake/last_refresh").strip()
         assert last == "rt-canary-vm-7c1e9f3a2b-1", f"the next life refreshed with {last}, not the persisted token"
@@ -249,24 +234,24 @@ pkgs.testers.runNixOSTest {
     with subtest("(i) the token endpoint's echo of a refresh token stays inside"):
         time.sleep(5)
         fake("mode", "fail-echo")
-        minter.succeed("systemctl restart hush-cred.service")
-        cred("rou2")
+        minter.succeed("systemctl restart hush.service")
+        cred("figaro")
         assert count("posts") == 4, count("posts")
         fake("mode", "refuse-echo")
-        minter.succeed("systemctl restart hush-cred.service")
-        status, doc = cred("rou2", 503)
+        minter.succeed("systemctl restart hush.service")
+        status, doc = cred("figaro", 503)
         assert doc["reason"] == "sign-in needed", doc
         assert endpoint.succeed("cat /run/fake/last_refresh").startswith(CANARY), "the canary never reached the endpoint"
         journal = minter.succeed("journalctl -o cat --no-pager")
         assert CANARY not in journal, "a refresh token reached the journal"
         for body in replies:
             assert CANARY not in body, body
-        minter.fail("grep -r rt-canary-vm /var/lib/hush-cred")
+        minter.fail("grep -r rt-canary-vm /var/lib/hush")
 
     with subtest("(iv) the state directory is left out of backups"):
         minter.succeed("systemctl start restic-backups-vmtest.service")
         listing = minter.succeed("restic -r /srv/restic --password-file /etc/restic-pw ls latest")
         assert "/var/lib/backup-control/present" in listing, "CONTROL: the backup missed /var/lib"
-        assert "/var/lib/hush-cred" not in listing, "the minter's state was backed up"
+        assert "/var/lib/hush" not in listing, "the minter's state was backed up"
   '';
 }

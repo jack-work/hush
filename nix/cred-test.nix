@@ -163,6 +163,8 @@ pkgs.testers.runNixOSTest {
         assert status == 404 and "token" not in doc, doc
         status, doc = call("figaro", "cred", "POST", "/login-start/chatgpt-personal", "{}")
         assert status == 404, doc
+        status, doc = call("figaro", "cred", "POST", "/refresh/anthropic-work", "{}")
+        assert status == 404, doc
 
     with subtest("drop box: a drop user signs in and refreshes, and can read nothing back"):
         status, doc = call("jack", "drop", "POST", "/login-start/chatgpt-personal", "{}")

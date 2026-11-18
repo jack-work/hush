@@ -201,6 +201,45 @@ func TestExecRefreshRunsTheCommandAgain(t *testing.T) {
 	}
 }
 
+func TestExecRefreshIsSingleFlightAndPaced(t *testing.T) {
+	e := newExecRig(t, "ok")
+	var wg sync.WaitGroup
+	codes := make(chan int, 25)
+	for range 25 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			res, err := e.client.Post("http://minter/refresh/ado-feed", "application/json", strings.NewReader("{}"))
+			if err != nil {
+				t.Error(err)
+				return
+			}
+			res.Body.Close()
+			codes <- res.StatusCode
+		}()
+	}
+	wg.Wait()
+	close(codes)
+	for c := range codes {
+		if c != 200 && c != http.StatusConflict {
+			t.Errorf("a concurrent refresh answered %d", c)
+		}
+	}
+	if n := e.runs(); n != 1 {
+		t.Fatalf("25 concurrent refreshes ran the command %d times, want 1", n)
+	}
+	res, err := e.client.Post("http://minter/refresh/ado-feed", "application/json", strings.NewReader("{}"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var body struct{ Refreshed bool }
+	_ = json.NewDecoder(res.Body).Decode(&body)
+	res.Body.Close()
+	if res.StatusCode != 200 || body.Refreshed || e.runs() != 1 {
+		t.Fatalf("a refresh inside the floor: status %d, refreshed %v, runs %d", res.StatusCode, body.Refreshed, e.runs())
+	}
+}
+
 func TestExecConfigValidation(t *testing.T) {
 	key, _ := age.GenerateX25519Identity()
 	base := fmt.Sprintf("recipient = %q\nallow_user = \"rou2\"\n", key.Recipient().String())

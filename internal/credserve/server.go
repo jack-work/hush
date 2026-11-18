@@ -170,16 +170,16 @@ func (s *Server) refreshRoute(w http.ResponseWriter, r *http.Request) bool {
 		writeError(w, 400, "invalid_request", "invalid request")
 		return true
 	}
-	if s.cfg.Instances[name].Kind == KindExec {
-		s.refreshExec(w, name)
-		return true
-	}
 	finish, performed, err := s.beginRemoteRefresh(name)
 	if err != nil {
 		writeOperationError(w, name, err)
 		return true
 	}
 	defer finish()
+	if s.cfg.Instances[name].Kind == KindExec {
+		s.refreshExec(w, name, performed)
+		return true
+	}
 	current, err := s.mgr.Lease(name)
 	if errors.Is(err, oauth.ErrNotFound) {
 		if adoptErr := s.mgr.Adopt(name); adoptErr != nil {

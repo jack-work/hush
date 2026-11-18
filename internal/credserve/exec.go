@@ -196,14 +196,14 @@ func (s *Server) answerExec(w http.ResponseWriter, name string) {
 	}{name, t.token, t.expires.Unix()})
 }
 
-func (s *Server) refreshExec(w http.ResponseWriter, name string) {
-	if _, err := s.execGet(name, true); err != nil {
+func (s *Server) refreshExec(w http.ResponseWriter, name string, performed bool) {
+	if _, err := s.execGet(name, performed); err != nil {
 		writeExecFailure(w, name, err)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "no-store")
-	_ = json.NewEncoder(w).Encode(map[string]any{"ready": true, "refreshed": true})
+	_ = json.NewEncoder(w).Encode(map[string]any{"ready": true, "refreshed": performed})
 }
 
 func writeExecFailure(w http.ResponseWriter, name string, err error) {

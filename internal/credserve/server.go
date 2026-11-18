@@ -38,6 +38,7 @@ type Server struct {
 	principals  map[string]PrincipalAuth
 	noLegacy    bool
 	pending     map[string]*remoteLogin
+	exec        execState
 	connMu      sync.Mutex
 	connections sync.WaitGroup
 	conns       map[net.Conn]bool
@@ -144,6 +145,10 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			writeError(w, 400, "invalid_request", "invalid request")
 			return
 		}
+		if s.cfg.Instances[name].Kind == KindExec {
+			s.refreshExec(w, name)
+			return
+		}
 		finish, performed, err := s.beginRemoteRefresh(name)
 		if err != nil {
 			writeOperationError(w, name, err)
@@ -184,6 +189,10 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) answer(w http.ResponseWriter, name string) {
+	if s.cfg.Instances[name].Kind == KindExec {
+		s.answerExec(w, name)
+		return
+	}
 	lease, err := s.mgr.Lease(name)
 	if errors.Is(err, oauth.ErrStopped) || errors.Is(err, oauth.ErrDrainUncertain) {
 		writeCredentialFailure(w, name, err)

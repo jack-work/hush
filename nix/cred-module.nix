@@ -14,6 +14,7 @@ let
       fence = "hush-fence";
       table = "hush";
       socketUnit = name: "hush-${name}";
+      rebindSockets = true;
     };
     hush-cred = {
       option = "services.hush-cred";
@@ -25,6 +26,7 @@ let
       fence = "hush-cred-fence";
       table = "hush_cred";
       socketUnit = name: "hush-cred-${name}";
+      rebindSockets = false;
     };
   };
 
@@ -212,6 +214,8 @@ let
         # Access by uid, never by group: a group gate fails for a process whose user manager started before the user
         # joined the group. The SO_PEERCRED check in the server is the second, independent layer.
         ExecStartPost = map (u: "${setfacl} -m u:${u}:rw ${p.socketPath}") p.users;
+      } // lib.optionalAttrs L.rebindSockets {
+        RemoveOnStop = true;
       };
     }) principals;
     ownerSocket = lib.optionalAttrs (owner != null) { ${owner.unit} = {
@@ -222,6 +226,8 @@ let
         SocketGroup = owner.group;
         SocketMode = owner.mode;
         DirectoryMode = "0755";
+      } // lib.optionalAttrs L.rebindSockets {
+        RemoveOnStop = true;
       } // lib.optionalAttrs (owner.unit != L.service) {
         Service = "${L.service}.service";
       } // lib.optionalAttrs (owner.fdName != null) {
@@ -374,6 +380,9 @@ let
         RestrictAddressFamilies = [ "AF_UNIX" "AF_INET" "AF_INET6" ];
         MemoryMax = "128M";
         TasksMax = 64;
+      } // lib.optionalAttrs L.rebindSockets {
+        Sockets = sockets;
+        X-NotSocketActivated = true;
       };
     };
   };

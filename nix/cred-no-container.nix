@@ -58,6 +58,8 @@ let
   both = failedWith "hush" { imports = [ self.nixosModules.hush-cred ]; services.hush = minter; services.hush-cred = minter; };
   oldWarns = (eval "hush-cred" { services.hush-cred = minter; }).config.warnings;
   newWarns = (eval "hush" { services.hush = minter; }).config.warnings;
+  newUnits = (eval "hush" { services.hush = minter // { credUsers = [ "root" ]; dropUsers = [ "root" ]; }; }).config.systemd;
+  oldUnits = (eval "hush-cred" { services.hush-cred = minter // { allowUser = "root"; }; }).config.systemd;
 in
 assert pkgs.lib.assertMsg (missedOld == [ ]) "services.hush-cred: a container bind exposing the minter socket passed: ${toString missedOld}";
 assert pkgs.lib.assertMsg (missedNew == [ ]) "services.hush: a container bind exposing a minter socket passed: ${toString missedNew}";
@@ -66,4 +68,7 @@ assert pkgs.lib.assertMsg (reserved != [ ]) "services.hush accepted a principal 
 assert pkgs.lib.assertMsg (both != [ ]) "services.hush and services.hush-cred were both enabled";
 assert pkgs.lib.assertMsg (pkgs.lib.any (pkgs.lib.hasPrefix "services.hush-cred is services.hush") oldWarns) "the old name gave no deprecation warning";
 assert pkgs.lib.assertMsg (!(pkgs.lib.any (pkgs.lib.hasInfix "hush") newWarns)) "the new name warned";
+assert pkgs.lib.assertMsg (pkgs.lib.sort (a: b: a < b) newUnits.services.hush.serviceConfig.Sockets == [ "hush-admin.socket" "hush-cred.socket" "hush-drop.socket" ]) "hush.service does not own its sockets, so a switch would not rebind them and re-apply their ACLs";
+assert pkgs.lib.assertMsg (pkgs.lib.all (s: s.socketConfig.RemoveOnStop or false) (pkgs.lib.attrValues (pkgs.lib.filterAttrs (n: _: pkgs.lib.hasPrefix "hush-" n) newUnits.sockets))) "a hush socket keeps its inode, and its ACL, across a stop";
+assert pkgs.lib.assertMsg (!(oldUnits.services.hush-cred.serviceConfig ? Sockets)) "the old name's units changed";
 pkgs.runCommand "hush-cred-no-container" { } "touch $out"

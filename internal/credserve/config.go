@@ -42,11 +42,6 @@ type Instance struct {
 	Timeout string   `toml:"timeout"`
 }
 
-// Principal is one caller identity with its own socket. Who may open the
-// socket is the grant: SO_PEERCRED must name one of Users, and the socket
-// serves only the instances in Credentials. Login lets the principal use
-// the remote sign-in routes as well, and Refresh POST /refresh/<name>, which
-// answers status and never a token.
 type Principal struct {
 	Users       []string `toml:"users"`
 	Credentials []string `toml:"credentials"`

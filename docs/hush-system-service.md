@@ -86,10 +86,24 @@ What changes for the host:
 | `hush-cred.service`, `hush-cred-fence.service`, table `inet hush_cred` | `hush.service`, `hush-fence.service`, table `inet hush` |
 | `allowUser`, `socketGroup` | `credUsers` (a list), `dropUsers`; the `socketGroup` group is no longer declared by hush |
 
+Before moving a host, check what it runs today:
+
+- A minter holding state with `grant = "anthropic"` (an `anthropic-max`
+  instance) needs the hush that knows that grant (keel
+  `feat/anthropic-max-login`). Started on a hush without it, the minter latches
+  `relogin_required` on that state at the first refresh, and evaluation fails
+  first on the missing egress URL for kind `anthropic`.
+- A host on a predecessor with a dynamic uid (spain's `hush-chatgpt`, state in
+  `/var/lib/hush-chatgpt-spain-v1`) is not covered by the steps below: stop its
+  socket and service, move its state to `/var/lib/hush`, `chown -R 476:476
+  /var/lib/hush` (the server refuses state it does not own), and point
+  `identityFile` at the moved identity. The VM test covers only the move from
+  `services.hush-cred`.
+
 Before the window, in the host's config branch:
 
 1. Replace `services.hush-cred = { ... allowUser = "rou2"; socketGroup = "rou2"; ... }`
-   with `services.hush = { ... credUsers = [ "rou2" ]; dropUsers = [ <people> ]; ... }`.
+   with `services.hush = { ... credUsers = [ "rou2" ]; dropUsers = [ "rou2" <people> ]; ... }`.
    Keep `uid`, `recipient`, `identityFile`, `instances` and `egress` as they
    are. If `identityFile` lies under `/var/lib/hush-cred`, point it at the
    same file under `/var/lib/hush`.
@@ -107,19 +121,6 @@ Before the window, in the host's config branch:
    `minter_control_socket` stays on `services.hush-cred` until it has it.
 3. Declare the old `socketGroup` group elsewhere if anything still uses it.
 
-Before moving a host, check what it runs today:
-
-- A minter holding state with `grant = "anthropic"` (an `anthropic-max`
-  instance) needs the hush that knows that grant (keel
-  `feat/anthropic-max-login`). Started on a hush without it, the minter latches
-  `relogin_required` on that state at the first refresh, and evaluation fails
-  first on the missing egress URL for kind `anthropic`.
-- A host on a predecessor with a dynamic uid (spain's `hush-chatgpt`, state in
-  `/var/lib/hush-chatgpt-spain-v1`) is not covered by the steps below: stop its
-  socket and service, move its state to `/var/lib/hush`, `chown -R 476:476
-  /var/lib/hush` (the server refuses state it does not own), and point
-  `identityFile` at the moved identity. The VM test covers only the move from
-  `services.hush-cred`.
 4. Build the system and keep its store path; do not switch yet.
 
 In the window, on the host:

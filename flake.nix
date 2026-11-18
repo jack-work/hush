@@ -127,6 +127,7 @@
       in {
         cred-vm = import ./nix/cred-test.nix { inherit pkgs self; };
         cred-no-container = import ./nix/cred-no-container.nix { inherit pkgs self nixpkgs; };
+        cred-rename-vm = import ./nix/cred-rename-test.nix { inherit pkgs self; };
       };
 
       devShells = forAllSystems ({ pkgs }: let

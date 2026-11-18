@@ -72,7 +72,8 @@ one minter on one uid.
 The login state is moved, never copied: two minters holding the same refresh
 token race to rotate it, and the loser's copy is dead. The old minter is
 stopped before the state moves. Do it in a daytime window; on spain it is
-folded into El Mayor's charter-consumer branch.
+folded into El Mayor's charter-consumer branch. The VM test `cred-rename-vm`
+runs these steps.
 
 What changes for the host:
 
@@ -117,7 +118,8 @@ sudo runuser -u hush -- curl -s --unix-socket /run/hush/admin.sock http://hush/s
 sudo runuser -u rou2 -- curl -s --unix-socket /run/hush/cred.sock http://hush/cred/anthropic-max | jq -r .expires_at
 ```
 
-`/status` must show each instance `ok`, as before the window. An instance that
+The old socket node stays in `/run/hush-cred` until reboot, answering nothing;
+`sudo rm -r /run/hush-cred` tidies it. `/status` must show each instance `ok`, as before the window. An instance that
 reads `unminted` means the state did not move: stop `hush.service` and look
 before anyone signs in again, since a fresh sign-in strands the moved token.
 

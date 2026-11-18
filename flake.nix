@@ -118,7 +118,9 @@
 
       nixosModules.hush-agent = self.nixosModules.default;
 
-      nixosModules.hush-cred = import ./nix/cred-module.nix self;
+      nixosModules.hush = import ./nix/cred-module.nix self;
+
+      nixosModules.hush-cred = self.nixosModules.hush;
 
       checks.x86_64-linux = let
         pkgs = nixpkgs.legacyPackages.x86_64-linux;

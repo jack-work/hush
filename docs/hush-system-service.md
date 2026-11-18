@@ -7,7 +7,7 @@ minter as system user `hush` (uid and gid 476), with its state in
 | socket | unit | who connects | what it answers |
 |---|---|---|---|
 | `/run/hush/cred.sock` | `hush-cred.socket` | `credUsers` (default `[ "figaro" ]`) | `GET /cred/<name>` for every instance: a short-lived bearer and its expiry. Nothing else. |
-| `/run/hush/drop.sock` | `hush-drop.socket` | `dropUsers` (default none, and then no socket) | `POST /login-start/<name>`, `POST /login-complete/<name>` (ChatGPT and Copilot instances), `POST /refresh/<name>`. Replies carry status, a sign-in URL or a device code, never a token. |
+| `/run/hush/drop.sock` | `hush-drop.socket` | `dropUsers` (default none, and then no socket) | `POST /login-start/<name>`, `POST /login-complete/<name>` (ChatGPT, Copilot and Anthropic instances), `POST /refresh/<name>`. Replies carry status, a sign-in URL or a device code, never a token. |
 | `/run/hush/admin.sock` | `hush-admin.socket` | the `hush` uid; root reaches it with `runuser -u hush` | `GET /status`, `POST /refresh/<name>`, the sign-in routes, `GET /cred/<name>` |
 | `/run/hush/<principal>.sock` | `hush-<principal>.socket` | that principal's `users` | `GET /cred/<name>` for its granted instances |
 
@@ -34,17 +34,21 @@ name   = "anthropic-work"
 
 ## Signing in
 
-- ChatGPT and Copilot, from a person in `dropUsers`, with the minter running:
+- ChatGPT, Copilot and Anthropic, from a person in `dropUsers`, with the
+  minter running:
 
   ```sh
   curl -s --unix-socket /run/hush/drop.sock -X POST -d '{}' http://hush/login-start/chatgpt-personal
-  # open authorize_url, then hand back the callback's code with the handle
+  # open authorize_url, then hand back the code with the handle
   curl -s --unix-socket /run/hush/drop.sock -X POST \
     -d '{"handle":"<handle>","code":"<code>"}' http://hush/login-complete/chatgpt-personal
   ```
 
-- Anthropic, at the host's terminal, with the minter stopped (the state lock
-  refuses a second owner):
+  For an Anthropic instance the code is the `code#state` Anthropic shows after
+  sign-in; a foreign or malformed paste answers 400 and spends nothing.
+
+- Anthropic at the host's terminal still works, with the minter stopped (the
+  state lock refuses a second owner):
 
   ```sh
   sudo systemctl stop hush-cred.socket hush-drop.socket hush-admin.socket hush.service
@@ -89,10 +93,8 @@ What changes for the host:
 Before moving a host, check what it runs today:
 
 - A minter holding state with `grant = "anthropic"` (an `anthropic-max`
-  instance) needs the hush that knows that grant (keel
-  `feat/anthropic-max-login`). Started on a hush without it, the minter latches
-  `relogin_required` on that state at the first refresh, and evaluation fails
-  first on the missing egress URL for kind `anthropic`.
+  instance) keeps `kind = "anthropic"`, the pinned Max sign-in. An instance
+  that names its own client and token URL is `kind = "refresh_token"`.
 - A host on a predecessor with a dynamic uid (spain's `hush-chatgpt`, state in
   `/var/lib/hush-chatgpt-spain-v1`) is not covered by the steps below: stop its
   socket and service, move its state to `/var/lib/hush`, `chown -R 476:476

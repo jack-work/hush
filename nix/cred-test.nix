@@ -164,7 +164,7 @@ pkgs.testers.runNixOSTest {
         status, doc = call("figaro", "cred", "POST", "/login-start/chatgpt-personal", "{}")
         assert status == 404, doc
 
-    with subtest("drop box: a drop user starts a sign-in and can read nothing back"):
+    with subtest("drop box: a drop user signs in and refreshes, and can read nothing back"):
         status, doc = call("jack", "drop", "POST", "/login-start/chatgpt-personal", "{}")
         assert status == 200 and doc["status"] == "started", doc
         assert sorted(doc) == ["authorize_url", "handle", "status"], doc
@@ -176,8 +176,9 @@ pkgs.testers.runNixOSTest {
             assert status == 403 and doc["error"] == "not_granted" and "token" not in doc, doc
         status, doc = call("jack", "drop", "GET", "/status")
         assert status == 404, doc
-        status, doc = call("jack", "drop", "POST", "/refresh/anthropic-work", "{}")
-        assert status == 404, doc
+        # The sign-in started above holds chatgpt-personal, so this reaches the refresh route without touching upstream.
+        status, doc = call("jack", "drop", "POST", "/refresh/chatgpt-personal", "{}")
+        assert status == 409 and doc["error"] == "operation_busy" and "token" not in doc, doc
         for user in ["figaro", "intruder", "outsider"]:
             minter.fail(f"runuser -u {user} -- curl -s --unix-socket /run/hush/drop.sock http://m/status")
         status, doc = call("root", "drop", "POST", "/login-start/chatgpt-personal", "{}")

@@ -7,7 +7,7 @@ minter as system user `hush` (uid and gid 476), with its state in
 | socket | unit | who connects | what it answers |
 |---|---|---|---|
 | `/run/hush/cred.sock` | `hush-cred.socket` | `credUsers` (default `[ "figaro" ]`) | `GET /cred/<name>` for every instance: a short-lived bearer and its expiry. Nothing else. |
-| `/run/hush/drop.sock` | `hush-drop.socket` | `dropUsers` (default none, and then no socket) | `POST /login-start/<name>`, `POST /login-complete/<name>` (ChatGPT and Copilot instances). Replies carry status, a sign-in URL or a device code, never a token. |
+| `/run/hush/drop.sock` | `hush-drop.socket` | `dropUsers` (default none, and then no socket) | `POST /login-start/<name>`, `POST /login-complete/<name>` (ChatGPT and Copilot instances), `POST /refresh/<name>`. Replies carry status, a sign-in URL or a device code, never a token. |
 | `/run/hush/admin.sock` | `hush-admin.socket` | the `hush` uid; root reaches it with `runuser -u hush` | `GET /status`, `POST /refresh/<name>`, the sign-in routes, `GET /cred/<name>` |
 | `/run/hush/<principal>.sock` | `hush-<principal>.socket` | that principal's `users` | `GET /cred/<name>` for its granted instances |
 
@@ -81,7 +81,7 @@ What changes for the host:
 |---|---|
 | user and group `hush-cred` (476) | user and group `hush` (476): the files keep their owner by number |
 | `/var/lib/hush-cred` | `/var/lib/hush` |
-| `/run/hush-cred/cred.sock`, everything for `allowUser` | `/run/hush/cred.sock`, `GET /cred/<name>` for `credUsers`; status and refresh moved to the admin socket, sign-in to the drop box |
+| `/run/hush-cred/cred.sock`, everything for `allowUser` | `/run/hush/cred.sock`, `GET /cred/<name>` for `credUsers`; status moved to the admin socket, refresh and sign-in to the drop box (refresh also on admin) |
 | `/etc/hush-cred/config.toml` | `/etc/hush/config.toml` |
 | `hush-cred.service`, `hush-cred-fence.service`, table `inet hush_cred` | `hush.service`, `hush-fence.service`, table `inet hush` |
 | `allowUser`, `socketGroup` | `credUsers` (a list), `dropUsers`; the `socketGroup` group is no longer declared by hush |
@@ -101,8 +101,10 @@ Before the window, in the host's config branch:
    `/refresh/<name>` on its minter socket to re-mint after an upstream 401,
    and `rou2 refresh` and `rou2 login` post `/refresh` and the sign-in routes
    there. On `/run/hush/cred.sock` those answer 404, so a 401 re-mint
-   silently returns the cached bearer. A host whose rou2 needs them stays on
-   `services.hush-cred` until rou2 learns a control socket.
+   silently returns the cached bearer. Put rou2 in `dropUsers` as well as
+   `credUsers`, and set rou2's `minter_socket = /run/hush/cred.sock` and
+   `minter_control_socket = /run/hush/drop.sock`. A host whose rou2 lacks
+   `minter_control_socket` stays on `services.hush-cred` until it has it.
 3. Declare the old `socketGroup` group elsewhere if anything still uses it.
 
 Before moving a host, check what it runs today:

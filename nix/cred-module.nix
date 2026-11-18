@@ -19,10 +19,45 @@ let
       redirectUri = mkOption { type = types.nullOr types.str; default = null; };
       deviceUrl = mkOption { type = types.nullOr types.str; default = null; };
       githubTokenUrl = mkOption { type = types.nullOr types.str; default = null; };
+      audit = mkOption {
+        type = types.bool;
+        default = false;
+        description = "Log one line per request for this credential (credential, principal, peer uid, status; never the token).";
+      };
     };
   };
 
-  instanceToml = i: lib.filterAttrs (_: v: v != null && v != "") {
+  principalType = types.submodule ({ name, ... }: {
+    options = {
+      users = mkOption {
+        type = types.nonEmptyListOf types.str;
+        description = "Users whose SO_PEERCRED uid may read on this principal's socket; each also gets a u:<user>:rw ACL on it.";
+      };
+      credentials = mkOption {
+        type = types.listOf types.str;
+        default = [ ];
+        description = "Instances this principal may read. Anything else is refused (403 not_granted).";
+      };
+      login = mkOption {
+        type = types.bool;
+        default = false;
+        description = "Allow the remote sign-in routes on this socket too.";
+      };
+      socketPath = mkOption {
+        type = types.str;
+        default = "/run/hush-cred/${name}.sock";
+        description = "Where the principal's socket lives (0600 hush-cred, plus one ACL entry per user).";
+      };
+    };
+  });
+
+  principalToml = p: {
+    users = p.users;
+    credentials = p.credentials;
+    socket = p.socketPath;
+  } // lib.optionalAttrs p.login { login = true; };
+
+  instanceToml = i: lib.filterAttrs (_: v: v != null && v != "" && v != false) {
     kind = i.kind;
     client_id = i.clientId;
     token_url = i.tokenUrl;
@@ -31,13 +66,35 @@ let
     redirect_uri = i.redirectUri;
     device_url = i.deviceUrl;
     github_token_url = i.githubTokenUrl;
+    audit = i.audit;
   };
 
-  configFile = (pkgs.formats.toml { }).generate "hush-cred.toml" {
+  configFile = (pkgs.formats.toml { }).generate "hush-cred.toml" ({
     recipient = cfg.recipient;
-    allow_user = cfg.allowUser;
     instances = lib.mapAttrs (_: instanceToml) cfg.instances;
-  };
+  } // lib.optionalAttrs (cfg.allowUser != null) {
+    allow_user = cfg.allowUser;
+  } // lib.optionalAttrs (cfg.principals != { }) {
+    principals = lib.mapAttrs (_: principalToml) cfg.principals;
+  });
+
+  setfacl = "${pkgs.acl}/bin/setfacl";
+  principalSockets = lib.mapAttrs' (pname: p: lib.nameValuePair "hush-cred-${pname}" {
+    wantedBy = [ "sockets.target" ];
+    listenStreams = [ p.socketPath ];
+    socketConfig = {
+      Service = "hush-cred.service";
+      FileDescriptorName = pname;
+      SocketUser = "hush-cred";
+      SocketGroup = "hush-cred";
+      SocketMode = "0600";
+      DirectoryMode = "0755";
+      # Access by uid, never by group: a group gate fails for a process whose user manager started before the user
+      # joined the group. The SO_PEERCRED check in the server is the second, independent layer.
+      ExecStartPost = map (u: "${setfacl} -m u:${u}:rw ${p.socketPath}") p.users;
+    };
+  }) cfg.principals;
+  allSocketPaths = lib.optional (cfg.allowUser != null) socketPath ++ map (p: p.socketPath) (lib.attrValues cfg.principals);
 
   egressUrls = lib.concatMap (i: if i.kind == "chatgpt" then [ "https://auth.openai.com/oauth/token" ] else lib.filter (u: u != null) [ i.tokenUrl i.deviceUrl i.githubTokenUrl ])
     (lib.attrValues cfg.instances);
@@ -70,9 +127,7 @@ let
     let p = stripSlash raw; in
     p != "" && (
       p == "/"
-      || p == socketPath
-      || lib.hasPrefix (p + "/") socketPath
-      || lib.hasPrefix (dirOf socketPath + "/") p
+      || lib.any (sp: p == sp || lib.hasPrefix (p + "/") sp || lib.hasPrefix (dirOf sp + "/") p) allSocketPaths
     );
 
   hush = lib.getExe cfg.package;
@@ -94,9 +149,15 @@ in
     };
 
     allowUser = mkOption {
-      type = types.str;
+      type = types.nullOr types.str;
       default = "rou2";
-      description = "The one user whose SO_PEERCRED uid may read /cred.";
+      description = "The one user whose SO_PEERCRED uid may read every credential on ${socketPath}. null: no such socket (principals only).";
+    };
+
+    principals = mkOption {
+      type = types.attrsOf principalType;
+      default = { };
+      description = "Callers with their own socket and grant list, beside (or instead of) allowUser.";
     };
 
     socketGroup = mkOption {
@@ -121,6 +182,11 @@ in
     };
 
     egress = {
+      fence = mkOption {
+        type = types.bool;
+        default = true;
+        description = "Confine the minter's uid to DNS and the resolved token endpoints (nftables). Needs a dnsmasq that fills the sets (egress.dnsmasq); turn it off on a host without one, or the minter reaches nothing.";
+      };
       resolvers = mkOption {
         type = types.listOf types.str;
         default = [ "127.0.0.1" ];
@@ -162,6 +228,14 @@ in
         assertion = cfg.instances != { };
         message = "services.hush-cred: no instances";
       }
+      {
+        assertion = cfg.allowUser != null || cfg.principals != { };
+        message = "services.hush-cred: set allowUser or at least one principal";
+      }
+    ] ++ lib.concatLists (lib.mapAttrsToList (pname: p: map (c: {
+      assertion = cfg.instances ? ${c};
+      message = "services.hush-cred: principal ${pname} grants ${c}, which is not an instance";
+    }) p.credentials) cfg.principals) ++ [
     ] ++ lib.concatLists (lib.mapAttrsToList (name: c: map (b: let p = if b.hostPath == null then b.mountPoint else toString b.hostPath; in {
       assertion = !(exposes p);
       message = "services.hush-cred: container ${name} binds ${p}, which holds the minter's socket; it is bound into no container";
@@ -181,11 +255,11 @@ in
       (pkgs.writeShellScriptBin "hush-cred" ''exec ${hush} cred "$@"'')
     ];
 
-    services.dnsmasq.settings.nftset = lib.mkIf cfg.egress.dnsmasq [
+    services.dnsmasq.settings.nftset = lib.mkIf (cfg.egress.fence && cfg.egress.dnsmasq) [
       "/${lib.concatStringsSep "/" egressHosts}/4#inet#${table}#allow4,6#inet#${table}#allow6"
     ];
 
-    systemd.services.hush-cred-fence = {
+    systemd.services.hush-cred-fence = lib.mkIf cfg.egress.fence {
       description = "the hush-cred egress fence: uid ${toString cfg.uid} reaches DNS and resolved token endpoints only";
       wantedBy = [ "multi-user.target" ];
       before = [ "hush-cred.service" "dnsmasq.service" ];
@@ -197,7 +271,7 @@ in
       };
     };
 
-    systemd.sockets.hush-cred = {
+    systemd.sockets = principalSockets // lib.optionalAttrs (cfg.allowUser != null) { hush-cred = {
       wantedBy = [ "sockets.target" ];
       listenStreams = [ socketPath ];
       socketConfig = {
@@ -206,13 +280,17 @@ in
         SocketMode = "0660";
         DirectoryMode = "0755";
       };
-    };
+    }; };
 
-    systemd.services.hush-cred = {
-      description = "hush cred serve: plan credentials for ${cfg.allowUser}";
+    systemd.services.hush-cred = let
+      sockets = lib.optional (cfg.allowUser != null) "hush-cred.socket"
+        ++ map (pname: "hush-cred-${pname}.socket") (lib.attrNames cfg.principals);
+      who = lib.concatStringsSep ", " (lib.optional (cfg.allowUser != null) cfg.allowUser ++ lib.attrNames cfg.principals);
+    in {
+      description = "hush cred serve: plan credentials for ${who}";
       wantedBy = [ "multi-user.target" ];
-      requires = [ "hush-cred.socket" "hush-cred-fence.service" ];
-      after = [ "hush-cred.socket" "hush-cred-fence.service" "network-online.target" "dnsmasq.service" ];
+      requires = sockets ++ lib.optional cfg.egress.fence "hush-cred-fence.service";
+      after = sockets ++ lib.optional cfg.egress.fence "hush-cred-fence.service" ++ [ "network-online.target" "dnsmasq.service" ];
       wants = [ "network-online.target" ];
       restartTriggers = [ configFile ];
       serviceConfig = {

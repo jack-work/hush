@@ -83,7 +83,13 @@ func runCredServe(cmd *cobra.Command, _ []string) (result error) {
 	if err != nil {
 		return err
 	}
-	uid, err := lookupUID(conf.AllowUser)
+	var uid uint32
+	if conf.AllowUser != "" {
+		if uid, err = lookupUID(conf.AllowUser); err != nil {
+			return err
+		}
+	}
+	principals, err := credserve.ResolvePrincipals(conf, lookupUID)
 	if err != nil {
 		return err
 	}
@@ -93,11 +99,13 @@ func runCredServe(cmd *cobra.Command, _ []string) (result error) {
 		return err
 	}
 	defer owner.Close()
-	ln, err := credListener(sockPath)
+	listeners, err := credListeners(conf, sockPath)
 	if err != nil {
 		return err
 	}
-	defer ln.Close()
+	for _, ln := range listeners {
+		defer ln.Close()
+	}
 
 	logger := log.New(os.Stderr, "", 0)
 	mgr := oauth.NewManager(stateDir, ids, conf.RecipientKey(), logger)
@@ -112,10 +120,16 @@ func runCredServe(cmd *cobra.Command, _ []string) (result error) {
 	}
 
 	srv := credserve.NewServer(conf, mgr, uid, logger)
+	srv.SetPrincipals(principals, conf.AllowUser != "")
 	ctx, stop := signal.NotifyContext(cmd.Context(), syscall.SIGTERM, syscall.SIGINT)
 	defer stop()
-	logger.Printf("cred: serving %d instances to uid %d", len(conf.Instances), uid)
-	return srv.ServeContext(ctx, ln)
+	if conf.AllowUser != "" {
+		logger.Printf("cred: serving %d instances to uid %d", len(conf.Instances), uid)
+	}
+	for name, p := range principals {
+		logger.Printf("cred: principal %s: %d credentials for %d uids", name, len(p.Credentials), len(p.UIDs))
+	}
+	return srv.ServeContext(ctx, listeners...)
 }
 
 func loadCredIdentities(path string, conf *credserve.Config) ([]age.Identity, error) {
@@ -162,6 +176,80 @@ func credListener(path string) (net.Listener, error) {
 	_ = os.Remove(path)
 	old := syscall.Umask(0o117)
 	ln, err = net.Listen("unix", path)
+	syscall.Umask(old)
+	return ln, err
+}
+
+// credListeners opens the allow_user socket (when allow_user is set) and one
+// socket per principal. Without principals it is exactly the old single
+// socket. Socket-activated descriptors are matched to principals by their
+// FileDescriptorName; the one descriptor not named for a principal is the
+// allow_user socket.
+func credListeners(conf *credserve.Config, legacyPath string) ([]net.Listener, error) {
+	if len(conf.Principals) == 0 {
+		ln, err := credListener(legacyPath)
+		if err != nil {
+			return nil, err
+		}
+		return []net.Listener{ln}, nil
+	}
+	inherited, err := credserve.InheritedListeners()
+	if err != nil {
+		return nil, err
+	}
+	var out []net.Listener
+	fail := func(err error) ([]net.Listener, error) {
+		for _, ln := range out {
+			ln.Close()
+		}
+		for _, ln := range inherited {
+			ln.Close()
+		}
+		return nil, err
+	}
+	for name, p := range conf.Principals {
+		ln := inherited[name]
+		delete(inherited, name)
+		if ln == nil {
+			if p.Socket == "" {
+				return fail(fmt.Errorf("principal %s: not socket-activated and no socket path", name))
+			}
+			if ln, err = bindSocket(p.Socket); err != nil {
+				return fail(fmt.Errorf("principal %s: %w", name, err))
+			}
+		}
+		out = append(out, credserve.PrincipalListener(ln, name))
+	}
+	if conf.AllowUser == "" {
+		if len(inherited) > 0 {
+			return fail(errors.New("socket activation: a descriptor names no principal and allow_user is not set"))
+		}
+		return out, nil
+	}
+	switch len(inherited) {
+	case 0:
+		if legacyPath == "" {
+			return fail(errors.New("allow_user is set: not socket-activated for it and no --socket given"))
+		}
+		ln, err := bindSocket(legacyPath)
+		if err != nil {
+			return fail(err)
+		}
+		out = append(out, ln)
+	case 1:
+		for _, ln := range inherited {
+			out = append(out, ln)
+		}
+	default:
+		return fail(fmt.Errorf("socket activation: %d descriptors name no principal; allow_user takes one", len(inherited)))
+	}
+	return out, nil
+}
+
+func bindSocket(path string) (net.Listener, error) {
+	_ = os.Remove(path)
+	old := syscall.Umask(0o117)
+	ln, err := net.Listen("unix", path)
 	syscall.Umask(old)
 	return ln, err
 }

@@ -33,12 +33,30 @@ type Instance struct {
 	Scopes         string `toml:"scopes"`
 	DeviceURL      string `toml:"device_url"`
 	GitHubTokenURL string `toml:"github_token_url"`
+	// Audit logs one line per GET /cred/<name> for this instance, served or
+	// refused: the credential, the principal, the peer uid and the status.
+	// Never the token.
+	Audit bool `toml:"audit"`
+}
+
+// Principal is one caller identity with its own socket. Who may open the
+// socket is the grant: SO_PEERCRED must name one of Users, and the socket
+// serves only the instances in Credentials. Login lets the principal use
+// the remote sign-in routes as well.
+type Principal struct {
+	Users       []string `toml:"users"`
+	Credentials []string `toml:"credentials"`
+	Socket      string   `toml:"socket"`
+	Login       bool     `toml:"login"`
 }
 
 type Config struct {
 	Recipient string              `toml:"recipient"`
 	AllowUser string              `toml:"allow_user"`
 	Instances map[string]Instance `toml:"instances"`
+	// Principals, when set, add one socket per principal beside the
+	// allow_user socket (which keeps serving every instance, as before).
+	Principals map[string]Principal `toml:"principals"`
 
 	recipient age.Recipient
 }
@@ -69,8 +87,8 @@ func ParseConfig(data []byte) (*Config, error) {
 	if c.recipient, err = age.ParseX25519Recipient(c.Recipient); err != nil {
 		return nil, fmt.Errorf("cred config: recipient: %w", err)
 	}
-	if c.AllowUser == "" {
-		return nil, errors.New("cred config: allow_user is required")
+	if c.AllowUser == "" && len(c.Principals) == 0 {
+		return nil, errors.New("cred config: allow_user or at least one [principals] entry is required")
 	}
 	if len(c.Instances) == 0 {
 		return nil, errors.New("cred config: no instances")
@@ -84,7 +102,41 @@ func ParseConfig(data []byte) (*Config, error) {
 			return nil, err
 		}
 	}
+	for name, p := range c.Principals {
+		if err := p.validate(name, c.Instances); err != nil {
+			return nil, err
+		}
+	}
 	return &c, nil
+}
+
+func (p Principal) validate(name string, instances map[string]Instance) error {
+	fail := func(format string, a ...any) error {
+		return fmt.Errorf("cred config: principal %s: "+format, append([]any{name}, a...)...)
+	}
+	if !instanceNameRE.MatchString(name) {
+		return fmt.Errorf("cred config: principal name %q must match %s", name, instanceNameRE)
+	}
+	if len(p.Users) == 0 {
+		return fail("users is required")
+	}
+	for _, u := range p.Users {
+		if u == "" {
+			return fail("an empty user")
+		}
+	}
+	if len(p.Credentials) == 0 && !p.Login {
+		return fail("credentials is required")
+	}
+	for _, cred := range p.Credentials {
+		if _, ok := instances[cred]; !ok {
+			return fail("credential %q is not an instance", cred)
+		}
+	}
+	if p.Socket != "" && !strings.HasPrefix(p.Socket, "/") {
+		return fail("socket %q is not an absolute path", p.Socket)
+	}
+	return nil
 }
 
 func (c *Config) RecipientKey() age.Recipient { return c.recipient }

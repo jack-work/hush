@@ -21,7 +21,12 @@ func (s *Server) connectionState(conn net.Conn, state http.ConnState) {
 	}
 }
 
-func (s *Server) ServeContext(ctx context.Context, listener net.Listener) error {
+// ServeContext serves every listener until ctx ends, then drains. The
+// first listener to fail stops them all.
+func (s *Server) ServeContext(ctx context.Context, listeners ...net.Listener) error {
+	if len(listeners) == 0 {
+		return errors.New("credential server: no listener")
+	}
 	server := s.HTTPServer()
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -36,8 +41,17 @@ func (s *Server) ServeContext(ctx context.Context, listener net.Listener) error 
 		}
 		shutdown <- err
 	}()
-	serveErr := server.Serve(listener)
+	served := make(chan error, len(listeners))
+	for _, ln := range listeners {
+		go func(ln net.Listener) { served <- server.Serve(ln) }(ln)
+	}
+	serveErr := <-served
 	cancel()
+	for range listeners[1:] {
+		if err := <-served; serveErr == nil || errors.Is(serveErr, http.ErrServerClosed) {
+			serveErr = err
+		}
+	}
 	drainErr := s.mgr.Stop()
 	shutdownErr := <-shutdown
 	s.connections.Wait()

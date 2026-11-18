@@ -223,7 +223,7 @@ pkgs.testers.runNixOSTest {
         endpoint.wait_until_succeeds("test $(cat /run/fake/posts) = 2")
         minter.succeed("systemctl kill -s KILL hush.service")
         fake("mode", "ok")
-        fake("expires_in", 34)
+        fake("expires_in", 45)
         minter.succeed("systemctl restart hush.service")
         status, doc = cred("figaro", 200)
         assert doc["token"] == "at-3", doc
@@ -232,7 +232,7 @@ pkgs.testers.runNixOSTest {
         assert "at-killed" not in minter.succeed("cat /tmp/killed")
 
     with subtest("(i) the token endpoint's echo of a refresh token stays inside"):
-        time.sleep(5)
+        time.sleep(16)
         fake("mode", "fail-echo")
         minter.succeed("systemctl restart hush.service")
         cred("figaro")

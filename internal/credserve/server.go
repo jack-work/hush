@@ -39,6 +39,7 @@ type Server struct {
 	noLegacy    bool
 	pending     map[string]*remoteLogin
 	exec        execState
+	staleAt     map[string]time.Time
 	connMu      sync.Mutex
 	connections sync.WaitGroup
 	conns       map[net.Conn]bool
@@ -120,6 +121,10 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if s.loginRoute(w, r) {
+		return
+	}
+	if r.URL.Path == "/status" {
+		s.serveStatus(w, r)
 		return
 	}
 	refresh := strings.HasPrefix(r.URL.Path, "/refresh/")

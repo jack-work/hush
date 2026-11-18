@@ -22,6 +22,7 @@ type remoteLogin struct {
 	expires          time.Time
 	completing       bool
 	timer            *time.Timer
+	device           *oauth.DeviceAuth
 }
 
 func controlBody(r *http.Request, target any, empty bool) bool {
@@ -59,7 +60,7 @@ func (s *Server) loginRoute(w http.ResponseWriter, r *http.Request) bool {
 	prefix := "/login-" + action + "/"
 	name := strings.TrimPrefix(r.URL.Path, prefix)
 	in, ok := s.cfg.Instances[name]
-	if !ok || name == "" || strings.Contains(name, "/") || in.Kind != KindChatGPT {
+	if !ok || name == "" || strings.Contains(name, "/") || (in.Kind != KindChatGPT && in.Kind != KindCopilot) {
 		writeError(w, 404, "unknown_credential", "no such credential")
 		return true
 	}
@@ -77,11 +78,23 @@ func (s *Server) loginRoute(w http.ResponseWriter, r *http.Request) bool {
 			writeError(w, 400, "invalid_request", "invalid request")
 			return true
 		}
-		s.startLogin(w, name, in)
+		if in.Kind == KindCopilot {
+			s.startDeviceLogin(w, r, name, in)
+		} else {
+			s.startLogin(w, name, in)
+		}
 	} else {
 		var body struct {
 			Handle string `json:"handle"`
 			Code   string `json:"code"`
+		}
+		if in.Kind == KindCopilot {
+			if !controlBody(r, &body, false) || len(body.Handle) > 128 || body.Code != "" {
+				writeError(w, 400, "invalid_request", "invalid request")
+				return true
+			}
+			s.completeDeviceLogin(w, r, name, in, body.Handle)
+			return true
 		}
 		if !controlBody(r, &body, false) || len(body.Handle) > 128 || len(body.Code) == 0 || len(body.Code) > 8192 {
 			writeError(w, 400, "invalid_request", "invalid request")

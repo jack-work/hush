@@ -32,6 +32,9 @@ type Server struct {
 
 	Now                func() time.Time
 	MinRefreshInterval time.Duration
+	// LoginClient reaches the device-flow endpoints for a remote copilot
+	// sign-in; nil means a client fenced to the config's egress hosts.
+	LoginClient *http.Client
 
 	mu          sync.Mutex
 	cells       map[string]*cell

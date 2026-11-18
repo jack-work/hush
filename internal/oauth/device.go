@@ -3,6 +3,7 @@ package oauth
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -279,4 +280,49 @@ func exchangeDeviceCode(ctx context.Context, doer httpDoer, endpoint, clientID, 
 		RefreshToken: body.RefreshToken,
 		ExpiresIn:    body.ExpiresIn,
 	}, nil
+}
+
+// Bounded-poll outcomes for a device code polled in short slices (a remote
+// sign-in whose caller asks again until the user has approved).
+var (
+	ErrDevicePending = errors.New("oauth: device authorization pending")
+	ErrDeviceExpired = errors.New("oauth: device code expired")
+	ErrDeviceDenied  = errors.New("oauth: device authorization denied")
+)
+
+// PollDeviceTokenFor polls like PollDeviceToken but for at most wait, then
+// returns ErrDevicePending. A slow_down widens da.Interval, so the next
+// slice keeps the wider interval.
+func PollDeviceTokenFor(ctx context.Context, doer httpDoer, tokenEndpoint, clientID string, da *DeviceAuth, wait time.Duration) (Tokens, error) {
+	stop := time.Now().Add(wait)
+	for {
+		if time.Now().After(da.Expiry()) {
+			return Tokens{}, ErrDeviceExpired
+		}
+		tok, err := exchangeDeviceCode(ctx, doer, tokenEndpoint, clientID, da.DeviceCode)
+		switch {
+		case err == nil:
+			return tok, nil
+		case isPending(err):
+		case isSlowDown(err):
+			da.Interval = int(da.PollInterval()/time.Second) + 5
+		case grantErrCode(err) == "expired_token":
+			return Tokens{}, ErrDeviceExpired
+		case grantErrCode(err) == "access_denied":
+			return Tokens{}, ErrDeviceDenied
+		default:
+			return Tokens{}, err
+		}
+		next := time.Now().Add(da.PollInterval())
+		if next.After(stop) {
+			return Tokens{}, ErrDevicePending
+		}
+		timer := time.NewTimer(time.Until(next))
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return Tokens{}, ctx.Err()
+		case <-timer.C:
+		}
+	}
 }

@@ -19,9 +19,10 @@ import (
 )
 
 const (
-	KindAnthropic = "anthropic"
-	KindCopilot   = "copilot"
-	KindChatGPT   = "chatgpt"
+	KindAnthropic    = "anthropic"
+	KindRefreshToken = "refresh_token"
+	KindCopilot      = "copilot"
+	KindChatGPT      = "chatgpt"
 )
 
 type Instance struct {
@@ -97,8 +98,12 @@ func ParseConfig(data []byte) (*Config, error) {
 		return nil, errors.New("cred config: no instances")
 	}
 	for name, in := range c.Instances {
-		if in.Kind == KindChatGPT {
+		switch in.Kind {
+		case KindChatGPT:
 			in = in.chatGPTDefaults()
+			c.Instances[name] = in
+		case KindAnthropic:
+			in = in.anthropicDefaults()
 			c.Instances[name] = in
 		}
 		if err := in.validate(name); err != nil {
@@ -166,9 +171,15 @@ func (in Instance) validate(name string) error {
 	if in.ClientID == "" {
 		return fail("client_id is required")
 	}
+	if in.Kind == KindAnthropic {
+		if in.AuthorizeURL != oauth.AnthropicAuthorizeURL || in.TokenURL != oauth.AnthropicTokenURL || in.ClientID != oauth.AnthropicClientID || in.RedirectURI != oauth.AnthropicRedirectURI || in.Scopes != oauth.AnthropicScopes || in.DeviceURL != "" || in.GitHubTokenURL != "" {
+			return fail("Anthropic endpoints, client, callback and scopes are pinned")
+		}
+		return nil
+	}
 	need := map[string]string{"token_url": in.TokenURL}
 	switch in.Kind {
-	case KindAnthropic:
+	case KindRefreshToken:
 		need["authorize_url"] = in.AuthorizeURL
 		need["redirect_uri"] = in.RedirectURI
 		if in.DeviceURL != "" || in.GitHubTokenURL != "" {
@@ -178,10 +189,10 @@ func (in Instance) validate(name string) error {
 		need["device_url"] = in.DeviceURL
 		need["github_token_url"] = in.GitHubTokenURL
 		if in.AuthorizeURL != "" || in.RedirectURI != "" {
-			return fail("authorize_url and redirect_uri belong to kind %q", KindAnthropic)
+			return fail("authorize_url and redirect_uri belong to kind %q", KindRefreshToken)
 		}
 	default:
-		return fail("kind must be %q, %q, %q or %q, not %q", KindAnthropic, KindCopilot, KindChatGPT, KindExec, in.Kind)
+		return fail("kind must be %q, %q, %q, %q or %q, not %q", KindAnthropic, KindRefreshToken, KindCopilot, KindChatGPT, KindExec, in.Kind)
 	}
 	for key, raw := range need {
 		if raw == "" {
@@ -213,7 +224,7 @@ func (in Instance) OAuthConfig(name string) oauth.Config {
 		Scopes:   in.Scopes,
 	}
 	switch in.Kind {
-	case KindAnthropic:
+	case KindRefreshToken:
 		c.AuthorizeURL = in.AuthorizeURL
 		c.RedirectURI = in.RedirectURI
 		c.Grant = oauth.GrantRefreshToken
@@ -223,6 +234,10 @@ func (in Instance) OAuthConfig(name string) oauth.Config {
 		c.AuthorizeURL = in.AuthorizeURL
 		c.RedirectURI = in.RedirectURI
 		c.Grant = oauth.GrantChatGPT
+	case KindAnthropic:
+		c.AuthorizeURL = in.AuthorizeURL
+		c.RedirectURI = in.RedirectURI
+		c.Grant = oauth.GrantAnthropic
 	}
 	return c
 }
@@ -276,6 +291,25 @@ func (in Instance) chatGPTDefaults() Instance {
 	}
 	if in.Scopes == "" {
 		in.Scopes = oauth.ChatGPTScopes
+	}
+	return in
+}
+
+func (in Instance) anthropicDefaults() Instance {
+	if in.AuthorizeURL == "" {
+		in.AuthorizeURL = oauth.AnthropicAuthorizeURL
+	}
+	if in.TokenURL == "" {
+		in.TokenURL = oauth.AnthropicTokenURL
+	}
+	if in.ClientID == "" {
+		in.ClientID = oauth.AnthropicClientID
+	}
+	if in.RedirectURI == "" {
+		in.RedirectURI = oauth.AnthropicRedirectURI
+	}
+	if in.Scopes == "" {
+		in.Scopes = oauth.AnthropicScopes
 	}
 	return in
 }

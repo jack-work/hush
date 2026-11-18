@@ -40,7 +40,7 @@ func TestStatusReportsOAuthStatesWithoutMintingOrTokens(t *testing.T) {
 	}
 	r.get(instName)
 	_, doc, raw = getStatus(t, r.client)
-	if st := doc[instName]; st.State != stateOK || st.Kind != "anthropic" || st.ExpiresAt == 0 {
+	if st := doc[instName]; st.State != stateOK || st.Kind != "refresh_token" || st.ExpiresAt == 0 {
 		t.Fatalf("after a read: %q", raw)
 	}
 	if strings.Contains(raw, "at-seed") || strings.Contains(raw, "rt-canary") {

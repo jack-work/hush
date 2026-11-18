@@ -47,7 +47,7 @@ func principalConfig(t *testing.T, key *age.X25519Identity, tokenURL, allow, ext
 	}
 	cfg, err := ParseConfig([]byte(head + fmt.Sprintf(`
 [instances.%s]
-kind = "anthropic"
+kind = "refresh_token"
 authorize_url = "https://claude.example/oauth/authorize"
 token_url = %q
 redirect_uri = "https://console.example/oauth/code/callback"

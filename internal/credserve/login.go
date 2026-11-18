@@ -5,6 +5,7 @@ package credserve
 import (
 	"bytes"
 	"context"
+	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -50,8 +51,10 @@ func (l *Login) Run(ctx context.Context) (result error) {
 	var tok oauth.Tokens
 	var err error
 	switch in.Kind {
+	case KindRefreshToken:
+		tok, err = l.pasteLogin(ctx, in)
 	case KindAnthropic:
-		tok, err = l.anthropic(ctx, in)
+		tok, err = l.anthropicLogin(ctx, in)
 	case KindCopilot:
 		tok, err = l.copilot(ctx, in)
 	case KindChatGPT:
@@ -108,7 +111,7 @@ func (l *Login) checkExisting() error {
 	return fmt.Errorf("%s is signed in and not marked sign-in needed; stop hush-cred and pass --replace to sign in again", l.Name)
 }
 
-func (l *Login) anthropic(ctx context.Context, in Instance) (oauth.Tokens, error) {
+func (l *Login) pasteLogin(ctx context.Context, in Instance) (oauth.Tokens, error) {
 	pkce, err := oauth.GeneratePKCE()
 	if err != nil {
 		return oauth.Tokens{}, err
@@ -136,6 +139,47 @@ func (l *Login) anthropic(ctx context.Context, in Instance) (oauth.Tokens, error
 		return oauth.Tokens{}, errors.New("the pasted state is not this login's")
 	}
 	return exchangeCode(ctx, l.Client, in, code, state, pkce.Verifier)
+}
+
+func (l *Login) anthropicLogin(ctx context.Context, in Instance) (oauth.Tokens, error) {
+	if err := in.validate(l.Name); err != nil {
+		return oauth.Tokens{}, err
+	}
+	pkce, err := oauth.GeneratePKCE()
+	if err != nil {
+		return oauth.Tokens{}, err
+	}
+	state, err := loginNonce()
+	if err != nil {
+		return oauth.Tokens{}, err
+	}
+	fmt.Fprintf(l.Out, "Open this URL, sign in, and paste the code it shows:\n\n  %s\n\n", anthropicAuthorizeURL(pkce, state))
+	raw, err := l.ReadCode("code#state: ")
+	if err != nil {
+		return oauth.Tokens{}, err
+	}
+	code, pasted, found := strings.Cut(strings.TrimSpace(raw), "#")
+	if !found || code == "" || pasted == "" {
+		return oauth.Tokens{}, errors.New("expected code#state")
+	}
+	if subtle.ConstantTimeCompare([]byte(pasted), []byte(state)) != 1 {
+		return oauth.Tokens{}, errors.New("the pasted state is not this login's")
+	}
+	return oauth.ExchangeAnthropicCode(ctx, l.Client, code, pasted, pkce.Verifier)
+}
+
+func anthropicAuthorizeURL(pkce oauth.PKCE, state string) string {
+	q := url.Values{
+		"code":                  {"true"},
+		"client_id":             {oauth.AnthropicClientID},
+		"response_type":         {"code"},
+		"redirect_uri":          {oauth.AnthropicRedirectURI},
+		"scope":                 {oauth.AnthropicScopes},
+		"code_challenge":        {pkce.Challenge},
+		"code_challenge_method": {"S256"},
+		"state":                 {state},
+	}
+	return oauth.AnthropicAuthorizeURL + "?" + q.Encode()
 }
 
 func exchangeCode(ctx context.Context, c *http.Client, in Instance, code, state, verifier string) (oauth.Tokens, error) {

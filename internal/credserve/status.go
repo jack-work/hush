@@ -51,7 +51,7 @@ func (s *Server) status() map[string]credStatus {
 				st.State = stateUnminted
 			case err != nil:
 				st.State, st.Reason = stateFailing, "credential state unavailable"
-			case lease.SignInNeeded || (in.Kind == KindChatGPT && !oauth.ValidAccountID(lease.AccountID)):
+			case lease.SignInNeeded || s.pinnedStale(name, lease):
 				st.State, st.Reason = stateStale, reasonSignIn
 			case lease.ExpiresAt.Sub(now) < serveFloor:
 				st.State, st.Reason, st.ExpiresAt = stateFailing, "token expired and the refresh has not succeeded", lease.ExpiresAt.Unix()

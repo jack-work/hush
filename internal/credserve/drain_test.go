@@ -31,7 +31,7 @@ type drainRoundTrip func(*http.Request) (*http.Response, error)
 func (f drainRoundTrip) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
 
 func drainConfig(key *age.X25519Recipient) *Config {
-	return &Config{Recipient: key.String(), AllowUser: fmt.Sprint(os.Getuid()), recipient: key, Instances: map[string]Instance{instName: {Kind: KindAnthropic, TokenURL: "https://fake.invalid/token", AuthorizeURL: "https://fake.invalid/auth", RedirectURI: "https://fake.invalid/callback", ClientID: "fake-drain"}}}
+	return &Config{Recipient: key.String(), AllowUser: fmt.Sprint(os.Getuid()), recipient: key, Instances: map[string]Instance{instName: {Kind: KindRefreshToken, TokenURL: "https://fake.invalid/token", AuthorizeURL: "https://fake.invalid/auth", RedirectURI: "https://fake.invalid/callback", ClientID: "fake-drain"}}}
 }
 
 func drainChild() int {

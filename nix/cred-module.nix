@@ -11,7 +11,7 @@ let
 
   instanceType = types.submodule {
     options = {
-      kind = mkOption { type = types.enum [ "anthropic" "copilot" "chatgpt" "exec" ]; };
+      kind = mkOption { type = types.enum [ "anthropic" "refresh_token" "copilot" "chatgpt" "exec" ]; };
       clientId = mkOption { type = types.str; default = ""; };
       tokenUrl = mkOption { type = types.str; default = ""; };
       scopes = mkOption { type = types.str; default = ""; };
@@ -108,7 +108,12 @@ let
   }) cfg.principals;
   allSocketPaths = lib.optional (cfg.allowUser != null) socketPath ++ map (p: p.socketPath) (lib.attrValues cfg.principals);
 
-  egressUrls = lib.concatMap (i: if i.kind == "exec" then [ ] else if i.kind == "chatgpt" then [ "https://auth.openai.com/oauth/token" ] else lib.filter (u: u != null) [ i.tokenUrl i.deviceUrl i.githubTokenUrl ])
+  pinnedTokenUrl = {
+    chatgpt = "https://auth.openai.com/oauth/token";
+    anthropic = "https://console.anthropic.com/v1/oauth/token";
+  };
+
+  egressUrls = lib.concatMap (i: if i.kind == "exec" then [ ] else if pinnedTokenUrl ? ${i.kind} then [ pinnedTokenUrl.${i.kind} ] else lib.filter (u: u != null) [ i.tokenUrl i.deviceUrl i.githubTokenUrl ])
     (lib.attrValues cfg.instances);
   hostOf = u: let m = builtins.match "https://([a-zA-Z0-9.-]+)(/.*)?" u; in if m == null then null else lib.head m;
   egressHosts = lib.unique (lib.filter (h: h != null) (map hostOf egressUrls));

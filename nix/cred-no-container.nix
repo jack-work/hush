@@ -11,8 +11,9 @@ let
           enable = true;
           recipient = "age1q420hq4mgxjlq2nw589e8hehfv3c6ld32z772qldwwlsvg89yqlqcgq8rd";
           identityFile = "/run/keys/hush-cred";
+          instances.anthropic-max.kind = "anthropic";
           instances.anthropic-work = {
-            kind = "anthropic";
+            kind = "refresh_token";
             clientId = "c";
             authorizeUrl = "https://claude.example/oauth/authorize";
             tokenUrl = "https://console.example/v1/oauth/token";

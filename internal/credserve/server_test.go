@@ -112,7 +112,7 @@ recipient = %q
 allow_user = "rou2"
 
 [instances.%s]
-kind = "anthropic"
+kind = "refresh_token"
 authorize_url = "https://claude.example/oauth/authorize"
 token_url = %q
 redirect_uri = "https://console.example/oauth/code/callback"
@@ -470,7 +470,7 @@ func TestFenceRefusesOtherHostsAndRedirects(t *testing.T) {
 
 func TestConfigRefusesSecretsAndPlainHTTP(t *testing.T) {
 	key, _ := age.GenerateX25519Identity()
-	base := fmt.Sprintf("recipient = %q\nallow_user = \"rou2\"\n[instances.a]\nkind = \"anthropic\"\nauthorize_url = \"https://a.example/authorize\"\nredirect_uri = \"https://a.example/cb\"\nclient_id = \"c\"\n", key.Recipient())
+	base := fmt.Sprintf("recipient = %q\nallow_user = \"rou2\"\n[instances.a]\nkind = \"refresh_token\"\nauthorize_url = \"https://a.example/authorize\"\nredirect_uri = \"https://a.example/cb\"\nclient_id = \"c\"\n", key.Recipient())
 	for label, extra := range map[string]string{
 		"client secret": "token_url = \"https://a.example/token\"\nclient_secret = \"s\"\n",
 		"refresh token": "token_url = \"https://a.example/token\"\nrefresh_token = \"s\"\n",

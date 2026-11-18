@@ -96,8 +96,28 @@ Before the window, in the host's config branch:
 2. Every consumer of `config.services.hush-cred.socketPath` now reads
    `config.services.hush.socketPath` (`/run/hush/cred.sock`). A consumer that
    called `/status`, `/refresh/<name>` or the sign-in routes on the old socket
-   moves to the admin socket or the drop box; rou2 calls only `/cred/<name>`.
+   moves to the admin socket or the drop box. figaro's providers call only
+   `GET /cred/<name>` and move as they are. rou2 does not: it posts
+   `/refresh/<name>` on its minter socket to re-mint after an upstream 401,
+   and `rou2 refresh` and `rou2 login` post `/refresh` and the sign-in routes
+   there. On `/run/hush/cred.sock` those answer 404, so a 401 re-mint
+   silently returns the cached bearer. A host whose rou2 needs them stays on
+   `services.hush-cred` until rou2 learns a control socket.
 3. Declare the old `socketGroup` group elsewhere if anything still uses it.
+
+Before moving a host, check what it runs today:
+
+- A minter holding state with `grant = "anthropic"` (an `anthropic-max`
+  instance) needs the hush that knows that grant (keel
+  `feat/anthropic-max-login`). Started on a hush without it, the minter latches
+  `relogin_required` on that state at the first refresh, and evaluation fails
+  first on the missing egress URL for kind `anthropic`.
+- A host on a predecessor with a dynamic uid (spain's `hush-chatgpt`, state in
+  `/var/lib/hush-chatgpt-spain-v1`) is not covered by the steps below: stop its
+  socket and service, move its state to `/var/lib/hush`, `chown -R 476:476
+  /var/lib/hush` (the server refuses state it does not own), and point
+  `identityFile` at the moved identity. The VM test covers only the move from
+  `services.hush-cred`.
 4. Build the system and keep its store path; do not switch yet.
 
 In the window, on the host:

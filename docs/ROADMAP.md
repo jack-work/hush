@@ -26,7 +26,7 @@ In review: #10 (stale episodes on `/status`) and #14 (the systemd socket goes th
 - A negative test for every refusal.
 - Tests run in the repository's nix devShell before a merge is asked for.
 - Tokens never enter a sandbox. A sandbox holds only its own short-lived identity.
-- hush is not a certificate authority. Certificates are signed by an external CA ([step-ca](https://smallstep.com/docs/step-ca/)); hush is its client.
+- Fleet certificates (SSH, web and service, sandbox identities) are signed by an external CA ([step-ca](https://smallstep.com/docs/step-ca/)); hush is its client. The one exception is figaro federation, which keeps its own CA (the troupe CA), moving into hush.
 
 ## Items
 
@@ -52,7 +52,7 @@ In review: #10 (stale episodes on `/status`) and #14 (the systemd socket goes th
 | Workload attestor (#25) | On a sandbox's workload socket, hush takes the peer as a pidfd (`SO_PEERPIDFD`, never a bare pid), reads its cgroup, maps it to the sandbox's systemd/nspawn unit and then to its identity, and requires the peer's uid to agree. An aria-level claim needs a second fact from figaro's box door. It then issues an X.509 SVID (10 minutes, renewed at 2/3) through the external CA. Interface: `POST /v1/attest` on a unix socket, `200 {spiffe_id, identity, unit, uid, expires_at}` or `403 {error: unattested, reason}`; clients fail closed. | refused: bare pid, exited pid, wrong cgroup, uid/unit disagree, unknown unit, retired identity, pid reuse, aria not in that sandbox, CSR SAN not the attested id; two sandboxes get distinct ids | both (the deployment-modes "local identity" is the same design) | not started |
 | Gateway attest path (#26) | The node gateway passes its caller's pidfd to hush over a unix socket (HTTP over the socket); hush runs the same attestor. `HTTPS_PROXY` just works from inside a sandbox. | unattested peer, another sandbox's pidfd, endpoint/identity mismatch refused | sandbox-identity | not started |
 | Timed grants and exchange (#27) | A grant is `{subject (SPIFFE id or prefix), dest host[:port], methods, path prefix, credential row, not_before, expires, approved_by}`, checked through `authorizeCred`. `POST /v1/exchange` returns the real token to the gateway, never to the sandbox. Admin revoke: a revoked grant stops the next exchange. | refused: no grant, expired, not yet valid, dest/method/path outside, another identity's grant, revoked | both (deployment-modes admin revoke folded in) | not started |
-| Federation (#28) | A machine's gateway or hush with no secrets of its own gets tokens from an upstream hush by grant, over mTLS (`services.hush.upstream` on the machine, `serveNodes` upstream). The machine in the subject must equal the caller's machine. | another machine's cert, a subject from another machine, an expired cert refused; upstream down gives 502 and no cached secret | both (deployment-modes stage 6 and the sandbox-identity remote gateway are the same item) | not started; see open question (a) |
+| Federation (#28) | figaro federation: an upstream hush serves the machines' hushes over mTLS signed by the troupe CA, which moves into hush (`services.hush.upstream` on a machine, `serveNodes` upstream; troupe root on offline media). It does not wait on, or block, the sandbox-identity gateway, which uses the external CA. Goal: merge the two into one system later. | another machine's cert, a subject from another machine, an expired cert refused; upstream down gives 502 and no cached secret | deployment-modes | not started; claimed by deployment-modes |
 | SSH user certificates (#29) | hush issues an attested workload a 10-minute OpenSSH user certificate from the external CA; the git server trusts that CA, with a short principal per identity. | expired cert, other CA, principal not granted, static key after migration refused | sandbox-identity | not started |
 | Per-aria identity (#30) | An aria's identity becomes unforgeable inside a shared sandbox once each aria runs under its own uid. | aria A's uid cannot get aria B's SVID | sandbox-identity | waits on figaro |
 
@@ -61,8 +61,8 @@ In review: #10 (stale episodes on `/status`) and #14 (the systemd socket goes th
 - The SSH host CA moves to the external CA (draft #9 will close; its negative tests become that CA's acceptance tests).
 - Static machine secrets stay with sops-nix.
 
-## Open questions (not decided here)
+## Decisions and open questions
 
-**(a) Federation CA.** deployment-modes signs federation with figaro troupe leaves (troupe root moved to offline media). sandbox-identity uses the external CA for every certificate, including machine identity. One must be chosen before the federation item starts.
+**(a) Federation CA: DECIDED.** figaro federation keeps its separate CA (the troupe CA, moving into hush, iterated by deployment-modes). The external CA stays the CA for SSH, web and service certificates, box CAs and sandbox identities. Neither blocks the other; the goal is to merge federation and the fleet system into one later.
 
 **(b) Canonical repository.** #8 and #11 to #13 merged here on GitHub. A second, self-hosted copy of hush is still at v0.17.0 (2bdde24). Decide which one is canonical and mirror the other from it.

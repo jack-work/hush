@@ -81,6 +81,11 @@ let
         default = false;
         description = "Allow POST /refresh/<name> on this socket too. It answers status, never a token.";
       };
+      overlay = mkOption {
+        type = types.bool;
+        default = false;
+        description = "Allow GET /v1/overlay on this socket: the live temporary grants and suspensions, for a gateway. The overlay is written on the owner socket only.";
+      };
       socketPath = mkOption {
         type = types.str;
         default = "${L.runDir}/${name}.sock";
@@ -113,6 +118,22 @@ let
       default = null;
       example = "/var/lib/grants/grants.json";
       description = "Absolute path of a consent grants file ({\"grants\": [{id, principal, credential, expires_at, approved_by}]}), read at every request: a live row grants that credential to that principal beside its credentials list, audited per use. The minter's user must be able to read it. null: no consent grants.";
+    };
+
+    loginGate = mkOption {
+      type = types.nullOr (types.submodule {
+        options = {
+          issuer = mkOption { type = types.str; description = "OpenID issuer URL (https); its discovery names the authorize, token and userinfo endpoints."; };
+          clientId = mkOption { type = types.str; description = "Public OAuth2 client (PKCE S256)."; };
+          group = mkOption { type = types.str; description = "Userinfo group the administrator must be in (name or name@domain)."; };
+          redirectUri = mkOption { type = types.str; description = "Registered redirect: the code relay's callback."; };
+          relay = mkOption { type = types.str; description = "GET <relay>?state=... answers the sign-in's code."; };
+          maxAge = mkOption { type = types.str; default = "5m"; description = "Oldest accepted auth_time."; };
+          wait = mkOption { type = types.str; default = "5m"; description = "How long login waits for the sign-in."; };
+        };
+      });
+      default = null;
+      description = "Gate `cred login` on a fresh administrator sign-in at an OpenID provider, before the credential's own login. null: no gate.";
     };
 
     recipient = mkOption {
@@ -172,6 +193,24 @@ let
       default = "${L.runDir}/systemd.sock";
       description = "The LoadCredential socket (0600 ${L.user}; systemd connects as root).";
     };
+
+    overlayAdminUsers = mkOption {
+      type = types.listOf types.str;
+      default = [ ];
+      example = [ "alice" ];
+      description = ''
+        Users who may WRITE the runtime overlay (POST/DELETE /v1/grants and /v1/suspensions) on the overlay admin socket
+        (root-owned 0600, one ACL entry per user; the server checks SO_PEERCRED again). No other socket writes the
+        overlay. Empty: no admin socket, and the overlay can only be read.
+      '';
+    };
+
+    overlayAdminSocketPath = mkOption {
+      type = types.str;
+      readOnly = true;
+      default = "${L.runDir}/overlay-admin.sock";
+      description = "The overlay admin socket.";
+    };
   };
 
   hushCfg = config.services.hush;
@@ -206,7 +245,8 @@ let
       users = p.users;
       credentials = p.credentials;
       socket = p.socketPath;
-    } // lib.optionalAttrs p.login { login = true; } // lib.optionalAttrs p.refresh { refresh = true; };
+    } // lib.optionalAttrs p.login { login = true; } // lib.optionalAttrs p.refresh { refresh = true; }
+      // lib.optionalAttrs (p.overlay or false) { overlay = true; };
 
     instanceToml = i: lib.filterAttrs (_: v: v != null && v != "" && v != false) {
       kind = i.kind;
@@ -233,6 +273,15 @@ let
       systemd = { socket = cfg.systemdSocketPath; units = cfg.unitGrants; };
     } // lib.optionalAttrs (cfg.consentGrants != null) {
       consent_grants = cfg.consentGrants;
+    } // lib.optionalAttrs (cfg.overlayAdminUsers != [ ]) {
+      overlay_admin = { socket = cfg.overlayAdminSocketPath; users = cfg.overlayAdminUsers; };
+    } // lib.optionalAttrs (cfg.loginGate != null) {
+      login_gate = with cfg.loginGate; {
+        inherit issuer group relay wait;
+        client_id = clientId;
+        redirect_uri = redirectUri;
+        max_age = maxAge;
+      };
     });
 
     setfacl = "${pkgs.acl}/bin/setfacl";
@@ -284,9 +333,26 @@ let
         RemoveOnStop = true;
       };
     }; };
-    socketUnits = lib.attrNames ownerSocket ++ lib.attrNames principalSockets ++ lib.attrNames systemdSocket;
+    overlayAdminSocket = lib.optionalAttrs (cfg.overlayAdminUsers != [ ]) { ${L.socketUnit "overlay-admin"} = {
+      wantedBy = [ "sockets.target" ];
+      listenStreams = [ cfg.overlayAdminSocketPath ];
+      socketConfig = {
+        Service = "${L.service}.service";
+        FileDescriptorName = "overlay-admin";
+        SocketUser = "root";
+        SocketGroup = "root";
+        SocketMode = "0600";
+        DirectoryMode = "0755";
+        ExecStartPost = map (u: "${setfacl} -m u:${u}:rw ${cfg.overlayAdminSocketPath}") cfg.overlayAdminUsers;
+      } // lib.optionalAttrs L.rebindSockets {
+        RemoveOnStop = true;
+      };
+    }; };
+    socketUnits = lib.attrNames ownerSocket ++ lib.attrNames principalSockets ++ lib.attrNames systemdSocket
+      ++ lib.attrNames overlayAdminSocket;
     allSocketPaths = lib.optional (owner != null) owner.path ++ map (p: p.socketPath) (lib.attrValues principals)
-      ++ lib.optional (cfg.unitGrants != { }) cfg.systemdSocketPath;
+      ++ lib.optional (cfg.unitGrants != { }) cfg.systemdSocketPath
+      ++ lib.optional (cfg.overlayAdminUsers != [ ]) cfg.overlayAdminSocketPath;
 
     pinnedTokenUrl = {
       chatgpt = "https://auth.openai.com/oauth/token";
@@ -392,7 +458,7 @@ let
       };
     };
 
-    systemd.sockets = principalSockets // ownerSocket // systemdSocket;
+    systemd.sockets = principalSockets // ownerSocket // systemdSocket // overlayAdminSocket;
 
     systemd.services.${L.service} = let
       sockets = map (u: "${u}.socket") socketUnits;

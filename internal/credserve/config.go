@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 
@@ -50,6 +51,9 @@ type Principal struct {
 	Socket      string   `toml:"socket"`
 	Login       bool     `toml:"login"`
 	Refresh     bool     `toml:"refresh"`
+	// Overlay lets this socket read the runtime overlay (GET /v1/overlay);
+	// the overlay is written on the owner socket only.
+	Overlay bool `toml:"overlay"`
 }
 
 type Config struct {
@@ -67,6 +71,12 @@ type Config struct {
 	// a live row grants that credential to that principal beside the
 	// config's own grants. Empty: no consent grants.
 	ConsentGrants string `toml:"consent_grants"`
+	// OverlayAdmin, when set, adds the socket that writes the runtime overlay
+	// (temporary grants and suspensions). No other socket writes it.
+	OverlayAdmin *OverlayAdmin `toml:"overlay_admin"`
+	// LoginGate, when set, gates `hush cred login` on an administrator's
+	// sign-in at an OpenID provider (see LoginGate).
+	LoginGate *LoginGate `toml:"login_gate"`
 
 	recipient age.Recipient
 }
@@ -129,6 +139,14 @@ func ParseConfig(data []byte) (*Config, error) {
 			return nil, err
 		}
 	}
+	if a := c.OverlayAdmin; a != nil && (len(a.Users) == 0 || slices.Contains(a.Users, "") || !filepath.IsAbs(a.Socket)) {
+		return nil, errors.New("cred config: overlay_admin needs users and an absolute socket path")
+	}
+	if c.LoginGate != nil {
+		if err := c.LoginGate.validate(); err != nil {
+			return nil, err
+		}
+	}
 	return &c, nil
 }
 
@@ -139,7 +157,7 @@ func (p Principal) validate(name string, instances map[string]Instance, consent 
 	if !instanceNameRE.MatchString(name) {
 		return fmt.Errorf("cred config: principal name %q must match %s", name, instanceNameRE)
 	}
-	if name == SystemdFDName {
+	if name == SystemdFDName || name == OverlayAdminFDName {
 		return fail("the name is reserved for the systemd LoadCredential socket")
 	}
 	if len(p.Users) == 0 {
@@ -150,7 +168,7 @@ func (p Principal) validate(name string, instances map[string]Instance, consent 
 			return fail("an empty user")
 		}
 	}
-	if len(p.Credentials) == 0 && !p.Login && !p.Refresh && !consent {
+	if len(p.Credentials) == 0 && !p.Login && !p.Refresh && !p.Overlay && !consent {
 		// With a consent grants file, a principal may hold consent grants only.
 		return fail("credentials is required")
 	}
@@ -276,6 +294,13 @@ func (c *Config) EgressHosts() []string {
 				continue
 			}
 			seen[hostPort(u)] = true
+		}
+	}
+	if c.LoginGate != nil {
+		for _, raw := range c.LoginGate.egressURLs() {
+			if u, err := url.Parse(raw); err == nil {
+				seen[hostPort(u)] = true
+			}
 		}
 	}
 	out := make([]string, 0, len(seen))

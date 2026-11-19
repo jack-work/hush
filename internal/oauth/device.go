@@ -31,6 +31,7 @@ type Discovery struct {
 	TokenEndpoint               string   `json:"token_endpoint"`
 	DeviceAuthorizationEndpoint string   `json:"device_authorization_endpoint"`
 	JWKSURI                     string   `json:"jwks_uri"`
+	UserinfoEndpoint            string   `json:"userinfo_endpoint"`
 	GrantTypesSupported         []string `json:"grant_types_supported"`
 	ScopesSupported             []string `json:"scopes_supported"`
 }

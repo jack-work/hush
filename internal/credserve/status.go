@@ -178,15 +178,23 @@ func (s *Server) saveStaleLocked() {
 	for n, t := range s.staleAt {
 		disk[n] = t.Unix()
 	}
-	data, _ := json.Marshal(disk)
-	tmp := s.staleFile + ".tmp"
+	if err := writeJSONAtomic(s.staleFile, disk); err != nil {
+		s.logger.Printf("cred: stale episodes not saved: %v", err)
+	}
+}
+
+// writeJSONAtomic writes v as JSON (0600) with a rename, so a crash leaves the
+// old file or the new one, never half of either.
+func writeJSONAtomic(path string, v any) error {
+	data, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+	tmp := path + ".tmp"
 	if err := os.WriteFile(tmp, data, 0o600); err != nil {
-		s.logger.Printf("cred: stale episodes not saved: %v", err)
-		return
+		return err
 	}
-	if err := os.Rename(tmp, s.staleFile); err != nil {
-		s.logger.Printf("cred: stale episodes not saved: %v", err)
-	}
+	return os.Rename(tmp, path)
 }
 
 func (s *Server) serveStatus(w http.ResponseWriter, r *http.Request) {

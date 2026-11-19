@@ -102,6 +102,7 @@ func init() {
 	f.String("intermediate-key", "", "its private key PEM, e.g. under $CREDENTIALS_DIRECTORY (required)")
 	f.String("jwt-key", "", "ECDSA P-256 key PEM for JWT-SVIDs (none: JWT-SVIDs are refused)")
 	f.String("socket", "", "bind this path when not socket-activated")
+	f.StringArray("cred", nil, "name=aud[,aud]: GET /cred/<name> answers the caller's own JWT-SVID for those audiences (repeatable)")
 	for _, c := range []*cobra.Command{workloadJWTCmd, workloadX509Cmd} {
 		c.Flags().String("trust-domain", "", "the troupe (required)")
 		c.Flags().String("socket", "", "the workload socket (default $"+workload.SocketEnv+", /run/hush/workload.sock, $XDG_RUNTIME_DIR/hush/workload.sock)")
@@ -317,7 +318,13 @@ func runWorkloadServe(cmd *cobra.Command, _ []string) error {
 			return err
 		}
 	}
+	raw, _ := cmd.Flags().GetStringArray("cred")
+	creds, err := workload.ParseCreds(raw)
+	if err != nil {
+		return err
+	}
 	srv := workload.NewServer(workload.PeerAttestor, workload.NodePolicy(td, node), auth)
+	srv.Creds = creds
 	srv.Log = slog.New(slog.NewJSONHandler(os.Stderr, nil))
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 	defer stop()

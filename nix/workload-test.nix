@@ -28,9 +28,10 @@ pkgs.testers.runNixOSTest {
       intermediateCert = "${pki}/inter.pem";
       intermediateKey = "/etc/hush-test/inter.key";
       jwtKey = "/etc/hush-test/jwt.key";
+      creds.svid-front = [ "front" ];
     };
     users.users.jack = { isNormalUser = true; uid = 1000; };
-    environment.systemPackages = [ self.packages.${pkgs.stdenv.hostPlatform.system}.default pkgs.openssl ];
+    environment.systemPackages = [ self.packages.${pkgs.stdenv.hostPlatform.system}.default pkgs.openssl pkgs.curl pkgs.jq ];
     systemd.services."inst@" = {
       serviceConfig = {
         Type = "oneshot";
@@ -65,6 +66,11 @@ pkgs.testers.runNixOSTest {
         out = spain.succeed("su - jack -c '${hush} workload x509 --trust-domain kelliher /tmp/svid'")
         assert "spiffe://kelliher/node/spain/uid/1000" in out, out
         spain.succeed("su - jack -c '${hush} workload jwt --trust-domain kelliher spain' | grep -E '^ey'")
+
+    with subtest("(ii-b) GET /cred/<name> answers the CALLER's own JWT-SVID: jack's uid, never another's"):
+        sub = spain.succeed("su - jack -c 'curl -sf --unix-socket /run/hush/workload.sock http://hush/cred/svid-front' | jq -r '.token | split(\".\")[1] | gsub(\"-\";\"+\") | gsub(\"_\";\"/\") | . + (\"=\" * ((4 - length % 4) % 4)) | @base64d | fromjson | .sub'")
+        assert sub.strip() == "spiffe://kelliher/node/spain/uid/1000", sub
+        spain.succeed("test \"$(su - jack -c 'curl -s -o /dev/null -w %{http_code} --unix-socket /run/hush/workload.sock http://hush/cred/svid-front?audience=rou2')\" = 400")
 
     with subtest("(iii) the issuer runs with no network, no capabilities, its own uid"):
         pid = spain.succeed("systemctl show -p MainPID --value hush-workload").strip()

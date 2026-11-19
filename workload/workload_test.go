@@ -70,6 +70,7 @@ func serve(t *testing.T, attest workload.Attestor, policy workload.Policy, auth 
 	}
 	srv := workload.NewServer(attest, policy, auth)
 	srv.Log = slog.New(slog.NewTextHandler(io.Discard, nil))
+	srv.Creds = map[string][]string{"svid-front": {"front", "front-canary"}}
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() { _ = srv.Serve(ctx, l); close(done) }()
@@ -153,17 +154,25 @@ func TestThePolicyMapsCgroupsToIdentities(t *testing.T) {
 	}
 }
 
-func post(t *testing.T, sock, path, body string) (int, map[string]string) {
+// call sends a POST with body, or a GET when body is empty, and decodes the
+// JSON answer.
+func call(t *testing.T, sock, path, body string) (int, map[string]any) {
 	t.Helper()
 	c := &http.Client{Transport: &http.Transport{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
 		return (&net.Dialer{}).DialContext(ctx, "unix", sock)
 	}}}
-	resp, err := c.Post("http://hush"+path, "application/json", strings.NewReader(body))
+	var resp *http.Response
+	var err error
+	if body == "" {
+		resp, err = c.Get("http://hush" + path)
+	} else {
+		resp, err = c.Post("http://hush"+path, "application/json", strings.NewReader(body))
+	}
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer resp.Body.Close()
-	var out map[string]string
+	var out map[string]any
 	_ = json.NewDecoder(resp.Body).Decode(&out)
 	return resp.StatusCode, out
 }
@@ -206,11 +215,15 @@ func TestTheSocketRefuses(t *testing.T) {
 		"jwt without audience":   {fixed(unitPeer), workload.NodePolicy("kelliher", "spain"), good, "/v1/jwt-svid", `{"audience":[]}`, 400, "bad_request"},
 		"jwt unattested":         {unattested, workload.NodePolicy("kelliher", "spain"), good, "/v1/jwt-svid", `{"audience":["a"]}`, 403, "unattested"},
 		"jwt without a key":      {fixed(unitPeer), workload.NodePolicy("kelliher", "spain"), workload.Authority{}, "/v1/jwt-svid", `{"audience":["a"]}`, 503, "unavailable"},
+		"cred not configured":    {fixed(unitPeer), workload.NodePolicy("kelliher", "spain"), good, "/cred/nope", "", 404, "not_found"},
+		"cred audience not its":  {fixed(unitPeer), workload.NodePolicy("kelliher", "spain"), good, "/cred/svid-front?audience=rou2", "", 400, "bad_request"},
+		"cred unattested":        {unattested, workload.NodePolicy("kelliher", "spain"), good, "/cred/svid-front", "", 403, "unattested"},
+		"cred without a key":     {fixed(unitPeer), workload.NodePolicy("kelliher", "spain"), workload.Authority{}, "/cred/svid-front", "", 503, "unavailable"},
 		"oversized body":         {fixed(unitPeer), workload.NodePolicy("kelliher", "spain"), good, "/v1/jwt-svid", `{"audience":["` + strings.Repeat("a", 20<<10) + `"]}`, 400, "bad_request"},
 	}
 	for name, c := range cases {
 		f := serve(t, c.attest, c.policy, c.auth)
-		status, out := post(t, f.socket, c.path, c.body)
+		status, out := call(t, f.socket, c.path, c.body)
 		if status != c.status || out["error"] != c.code {
 			t.Errorf("%s: %d %v, want %d %s", name, status, out, c.status, c.code)
 		}
@@ -246,4 +259,62 @@ func TestTheClientRefusesAnAnswerItCannotVerify(t *testing.T) {
 
 func pemCSR(der []byte) []byte {
 	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE REQUEST", Bytes: der})
+}
+
+func TestACredFetchAnswersTheCallersOwnSVID(t *testing.T) {
+	auth := authority(t, "spain", time.Now())
+	b := auth.Bundle
+	cases := []struct {
+		name  string
+		peer  workload.Peer
+		query string
+		want  string // the SPIFFE ID the token names
+		aud   string // an audience it must verify for
+	}{
+		{"the unit gets its own", unitPeer, "", "spiffe://kelliher/node/spain/unit/figaro.service", "front"},
+		{"every row audience", unitPeer, "", "spiffe://kelliher/node/spain/unit/figaro.service", "front-canary"},
+		{"another uid gets ITS own, never the unit's", workload.Peer{PID: 7, UID: 1000, Cgroup: "/user.slice/user-1000.slice/session-1.scope"}, "", "spiffe://kelliher/node/spain/uid/1000", "front"},
+		{"a narrower audience it asks for", unitPeer, "?audience=front-canary", "spiffe://kelliher/node/spain/unit/figaro.service", "front-canary"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			f := serve(t, fixed(c.peer), workload.NodePolicy("kelliher", "spain"), auth)
+			status, out := call(t, f.socket, "/cred/svid-front"+c.query, "")
+			tok, _ := out["token"].(string)
+			if status != 200 || out["name"] != "svid-front" || tok == "" {
+				t.Fatalf("%d %v", status, out)
+			}
+			got, err := svid.VerifyJWT(tok, b, c.aud, time.Now())
+			if err != nil || got.ID.String() != c.want {
+				t.Fatalf("token names %v (%v), want %s", got.ID, err, c.want)
+			}
+			if exp, _ := out["expires_at"].(float64); int64(exp) != got.Expiry.Unix() {
+				t.Fatalf("expires_at %v, token expiry %v", out["expires_at"], got.Expiry)
+			}
+			if c.query != "" {
+				if _, err := svid.VerifyJWT(tok, b, "front", time.Now()); err == nil {
+					t.Fatal("asked for front-canary only, but the token also speaks to front")
+				}
+			}
+		})
+	}
+}
+
+func TestParseCreds(t *testing.T) {
+	for raw, want := range map[string]string{
+		"svid-front=front":         "",
+		"svid-front=front,canary":  "",
+		"svid-front":               "want name=aud",
+		"=front":                   "want name=aud",
+		"svid-front=":              "want name=aud",
+		"svid-front=front,,canary": "want name=aud",
+	} {
+		_, err := workload.ParseCreds([]string{raw})
+		if (want == "") != (err == nil) || (err != nil && !strings.Contains(err.Error(), want)) {
+			t.Errorf("%q: %v, want %q", raw, err, want)
+		}
+	}
+	if _, err := workload.ParseCreds([]string{"a=x", "a=y"}); err == nil || !strings.Contains(err.Error(), "twice") {
+		t.Errorf("a duplicate name: %v", err)
+	}
 }

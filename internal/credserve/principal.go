@@ -96,6 +96,9 @@ func (s *Server) servePrincipal(w http.ResponseWriter, r *http.Request, name str
 	if p.Refresh && s.refreshRoute(w, r) {
 		return
 	}
+	if s.sshCARoute(w, r, name, func(c string) bool { return p.Credentials[c] }) {
+		return
+	}
 	cred, found := strings.CutPrefix(r.URL.Path, "/cred/")
 	if !found || cred == "" || strings.Contains(cred, "/") || r.Method != http.MethodGet {
 		// The broker this replaces answers exactly this on a principal socket; callers may match on it.

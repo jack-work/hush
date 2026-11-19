@@ -121,6 +121,7 @@ func runCredServe(cmd *cobra.Command, _ []string) (result error) {
 
 	srv := credserve.NewServer(conf, mgr, uid, logger)
 	srv.SetPrincipals(principals, conf.AllowUser != "")
+	srv.SetSSHCA(stateDir, ids)
 	ctx, stop := signal.NotifyContext(cmd.Context(), syscall.SIGTERM, syscall.SIGINT)
 	defer stop()
 	if conf.AllowUser != "" {
@@ -264,6 +265,9 @@ func runCredLogin(cmd *cobra.Command, args []string) error {
 	conf, err := credserve.LoadConfig(confPath)
 	if err != nil {
 		return err
+	}
+	if conf.Instances[args[0]].Kind == credserve.KindSSHCA {
+		return fmt.Errorf("%s is kind %q: it has no sign-in; POST /ssh-ca/%s/rotate (with the Boss's grant) mints its keys", args[0], credserve.KindSSHCA, args[0])
 	}
 	if conf.Instances[args[0]].Kind == credserve.KindExec {
 		return fmt.Errorf("%s is kind %q: it signs in through its own command, not hush", args[0], credserve.KindExec)

@@ -99,12 +99,15 @@ func runCredServe(cmd *cobra.Command, _ []string) (result error) {
 		return err
 	}
 	defer owner.Close()
-	listeners, err := credListeners(conf, sockPath)
+	listeners, systemdLn, err := credListeners(conf, sockPath)
 	if err != nil {
 		return err
 	}
 	for _, ln := range listeners {
 		defer ln.Close()
+	}
+	if systemdLn != nil {
+		defer systemdLn.Close()
 	}
 
 	logger := log.New(os.Stderr, "", 0)
@@ -128,6 +131,15 @@ func runCredServe(cmd *cobra.Command, _ []string) (result error) {
 	}
 	for name, p := range principals {
 		logger.Printf("cred: principal %s: %d credentials for %d uids", name, len(p.Credentials), len(p.UIDs))
+	}
+	if systemdLn != nil {
+		logger.Printf("cred: systemd LoadCredential socket: %d units", len(conf.Systemd.Units))
+		go func() {
+			if err := srv.ServeSystemd(ctx, systemdLn); err != nil {
+				logger.Printf("cred: systemd socket: %v", err)
+				stop()
+			}
+		}()
 	}
 	return srv.ServeContext(ctx, listeners...)
 }
@@ -185,27 +197,44 @@ func credListener(path string) (net.Listener, error) {
 // socket. Socket-activated descriptors are matched to principals by their
 // FileDescriptorName; the one descriptor not named for a principal is the
 // allow_user socket.
-func credListeners(conf *credserve.Config, legacyPath string) ([]net.Listener, error) {
-	if len(conf.Principals) == 0 {
+func credListeners(conf *credserve.Config, legacyPath string) ([]net.Listener, net.Listener, error) {
+	if len(conf.Principals) == 0 && conf.Systemd == nil {
 		ln, err := credListener(legacyPath)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
-		return []net.Listener{ln}, nil
+		return []net.Listener{ln}, nil, nil
 	}
 	inherited, err := credserve.InheritedListeners()
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	var out []net.Listener
-	fail := func(err error) ([]net.Listener, error) {
+	var systemdLn net.Listener
+	fail := func(err error) ([]net.Listener, net.Listener, error) {
 		for _, ln := range out {
 			ln.Close()
 		}
 		for _, ln := range inherited {
 			ln.Close()
 		}
-		return nil, err
+		if systemdLn != nil {
+			systemdLn.Close()
+		}
+		return nil, nil, err
+	}
+	if conf.Systemd != nil {
+		systemdLn = inherited[credserve.SystemdFDName]
+		delete(inherited, credserve.SystemdFDName)
+		if systemdLn == nil {
+			if systemdLn, err = bindSocket(conf.Systemd.Socket); err != nil {
+				return fail(fmt.Errorf("systemd socket: %w", err))
+			}
+			// Only the owner and root (the system manager) connect.
+			if err := os.Chmod(conf.Systemd.Socket, 0o600); err != nil {
+				return fail(fmt.Errorf("systemd socket: %w", err))
+			}
+		}
 	}
 	for name, p := range conf.Principals {
 		ln := inherited[name]
@@ -224,7 +253,7 @@ func credListeners(conf *credserve.Config, legacyPath string) ([]net.Listener, e
 		if len(inherited) > 0 {
 			return fail(errors.New("socket activation: a descriptor names no principal and allow_user is not set"))
 		}
-		return out, nil
+		return out, systemdLn, nil
 	}
 	switch len(inherited) {
 	case 0:
@@ -243,7 +272,7 @@ func credListeners(conf *credserve.Config, legacyPath string) ([]net.Listener, e
 	default:
 		return fail(fmt.Errorf("socket activation: %d descriptors name no principal; allow_user takes one", len(inherited)))
 	}
-	return out, nil
+	return out, systemdLn, nil
 }
 
 func bindSocket(path string) (net.Listener, error) {

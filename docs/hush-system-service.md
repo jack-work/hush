@@ -10,12 +10,31 @@ minter as system user `hush` (uid and gid 476), with its state in
 | `/run/hush/drop.sock` | `hush-drop.socket` | `dropUsers` (default none, and then no socket) | `POST /login-start/<name>`, `POST /login-complete/<name>` (ChatGPT, Copilot and Anthropic instances), `POST /refresh/<name>`. Replies carry status, a sign-in URL or a device code, never a token. |
 | `/run/hush/admin.sock` | `hush-admin.socket` | the `hush` uid; root reaches it with `runuser -u hush` | `GET /status`, `POST /refresh/<name>`, the sign-in routes, `GET /cred/<name>` |
 | `/run/hush/<principal>.sock` | `hush-<principal>.socket` | that principal's `users` | `GET /cred/<name>` for its granted instances |
+| `/run/hush/systemd.sock` | `hush-loadcredential.socket` | systemd itself (peer uid 0), for units in `unitGrants` (default none, and then no socket) | raw bytes, no HTTP: the token for `LoadCredential=<id>:/run/hush/systemd.sock`, or nothing |
 
 Each socket is 0600 `hush:hush` plus one `u:<user>:rw` ACL entry per listed
 user, and the server checks the peer's `SO_PEERCRED` uid again. Group
 membership grants nothing: a group gate fails for a process whose user manager
-started before the user joined the group. The principal names `cred`, `drop`
-and `admin` are taken.
+started before the user joined the group. The principal names `cred`, `drop`,
+`admin` and `loadcredential` are taken.
+
+## A unit's token by LoadCredential
+
+A unit that needs a token and should hold no socket access of its own gets it
+from systemd:
+
+```nix
+services.hush.unitGrants."keel-lieutenant.service".token = "ghe-read";
+systemd.services.keel-lieutenant.serviceConfig.LoadCredential = [ "token:/run/hush/systemd.sock" ];
+```
+
+systemd connects from the abstract address `\0<random>/unit/<unit>/<id>`;
+hush believes that unit name only from uid 0 (any process can bind an abstract
+address), looks up `unitGrants.<unit>.<id>` and writes the raw token, which
+the unit reads from `$CREDENTIALS_DIRECTORY/token`. Anything else is closed
+having written nothing, and systemd still starts the unit, with an EMPTY
+credential file: treat an empty credential as a failure. A token is read at
+unit start, so a long-running unit restarts to get a fresh one.
 
 One `hush.service` takes every socket by name. `hush-fence.service` loads the
 egress fence (nftables table `inet hush`); `/var/lib/hush` is left out of every

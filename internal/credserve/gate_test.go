@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -45,6 +46,7 @@ func (c *fakeClock) after(d time.Duration) <-chan time.Time {
 type idp struct {
 	relay     []int          // statuses answered before the code (e.g. 503, 404)
 	pending   bool           // the relay never has a code
+	slowDown  bool           // the relay always answers 429
 	relayBody string         // the 200 body (default {"code":"gate-code"})
 	token     string         // the token endpoint's answer (default: a good one)
 	tokenCode int            // the token endpoint's status (default 200)
@@ -95,6 +97,9 @@ func gateRig(t *testing.T, p *idp) (*Login, *syncBuffer, func() idp) {
 			p.gotState = req.URL.Query().Get("state")
 			if p.pending {
 				return 404, `{}`
+			}
+			if p.slowDown {
+				return 429, `{}`
 			}
 			if len(p.relay) > 0 {
 				s := p.relay[0]
@@ -183,6 +188,7 @@ func TestLoginGate(t *testing.T) {
 		{"no auth_time", idp{groups: member, claims: map[string]any{"auth_time": 0}}, "login gate: the sign-in is not fresh (auth_time older than 5m0s)", 1},
 		{"exp one second past skew", idp{groups: member, claims: map[string]any{"exp": gateT0.Add(-61 * time.Second).Unix()}}, "login gate: id_token expired", 1},
 		{"another sign-in's nonce", idp{groups: member, claims: map[string]any{"nonce": "other"}}, "login gate: id_token nonce does not match this sign-in", 1},
+		{"another issuer", idp{groups: member, claims: map[string]any{"iss": "https://evil.example"}}, `login gate: id_token issuer "https://evil.example" is not "ISSUER"`, 1},
 		{"a token for another client", idp{groups: member, claims: map[string]any{"aud": []string{"troupe"}}}, `login gate: id_token is not for client "hush-cli"`, 1},
 		{"no audience", idp{groups: member, claims: map[string]any{"aud": nil}}, `login gate: id_token is not for client "hush-cli"`, 1},
 		{"id_token not a JWS", idp{groups: member, rawIDTok: "a.b"}, "login gate: id_token is not a JWS", 1},
@@ -196,6 +202,7 @@ func TestLoginGate(t *testing.T) {
 		{"relay answer not JSON", idp{relayBody: `a]b[c`}, "login gate: relay: the answer is not JSON", 1},
 		{"relay answer without a code", idp{relayBody: `{"code":""}`}, "login gate: relay: no code in the answer", 1},
 		{"relay refuses the request", idp{relay: []int{400}}, "login gate: relay 400: body of 2 bytes", 1},
+		{"relay says slow down forever: 5s apart in 10s is exactly 2 polls", idp{slowDown: true}, "login gate: no sign-in arrived in time", 2},
 		{"nobody signs in: wait 10s at 1s polls is exactly 10 polls", idp{pending: true}, "login gate: no sign-in arrived in time", 10},
 	}
 	for _, c := range cases {
@@ -215,8 +222,9 @@ func TestLoginGate(t *testing.T) {
 					t.Fatalf("%s: the relay was asked for state %q, the sign-in's is %q", c.name, got.gotState, want)
 				}
 			} else {
-				if err == nil || err.Error() != c.want {
-					t.Fatalf("%s: got %v, want %q", c.name, err, c.want)
+				want := strings.ReplaceAll(c.want, "ISSUER", l.Config.LoginGate.Issuer) // the rig's own issuer URL
+				if err == nil || err.Error() != want {
+					t.Fatalf("%s: got %v, want %q", c.name, err, want)
 				}
 				if got.credPost {
 					t.Fatalf("%s: the gate refused but the credential's login ran", c.name)

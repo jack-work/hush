@@ -7,13 +7,11 @@ import (
 	"errors"
 	"io"
 	"io/fs"
-	"log"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/jack-work/hush/internal/oauth"
 )
@@ -61,8 +59,7 @@ func TestStatusReportsOAuthStatesWithoutMintingOrTokens(t *testing.T) {
 func TestStatusStaleCarriesSinceAndClears(t *testing.T) {
 	r := newRig(t, seedTokens(3600))
 	r.get(instName)
-	r.ep.setAnswer(func(int64, *http.Request) (int, string) { return 400, `{"error":"invalid_grant"}` })
-	r.skew(2 * time.Hour)
+	r.refuseRefresh()
 	r.get(instName) // refresh refused: sign-in needed
 	_, doc, raw := getStatus(t, r.client)
 	st := doc[instName]
@@ -134,8 +131,7 @@ func TestStaleEpisodeIsOnDiskAndSurvivesRestart(t *testing.T) {
 	if m := readStaleFile(t, file); len(m) != 0 {
 		t.Fatalf("a fresh credential has an episode: %v", m)
 	}
-	r.ep.setAnswer(func(int64, *http.Request) (int, string) { return 400, `{"error":"invalid_grant"}` })
-	r.skew(2 * time.Hour)
+	r.refuseRefresh()
 	if a := r.get(instName); a.status != 503 || a.Error != "credential_stale" {
 		t.Fatalf("got %d %q", a.status, a.raw)
 	}
@@ -156,11 +152,7 @@ func TestStaleEpisodeIsOnDiskAndSurvivesRestart(t *testing.T) {
 		t.Fatalf("after a restart want stale since %d: %q", since, body)
 	}
 
-	login := oauth.NewManager(r.stateDir, nil, r.key.Recipient(), log.New(io.Discard, "", 0))
-	if err := login.Register(r.cfg.Instances[instName].OAuthConfig(instName), oauth.Tokens{AccessToken: "at-relogin", RefreshToken: "rt-relogin-abcdefgh", ExpiresIn: 3600}); err != nil {
-		t.Fatal(err)
-	}
-	login.Stop()
+	r.signIn(oauth.Tokens{AccessToken: "at-relogin", RefreshToken: "rt-relogin-abcdefgh", ExpiresIn: 3600})
 	if a := r.get(instName); a.status != 200 {
 		t.Fatalf("new sign-in not served: %q", a.raw)
 	}
@@ -172,32 +164,33 @@ func TestStaleEpisodeIsOnDiskAndSurvivesRestart(t *testing.T) {
 	}
 }
 
-// A stale file naming a credential this server does not serve, a zero start,
-// or garbage never invents or corrupts an episode, and orphans are dropped on
-// the next write.
-func TestStaleFileIgnoresUnknownNamesAndGarbage(t *testing.T) {
-	r := newRig(t, seedTokens(3600))
-	file := filepath.Join(r.stateDir, "stale.json")
-	if err := os.WriteFile(file, []byte(`not json`), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	r.srv.SetStaleFile(file)
-	if _, doc, body := getStatus(t, r.client); doc[instName].State != stateOK {
-		t.Fatalf("garbage stale file broke status: %q", body)
-	}
-
-	if err := os.WriteFile(file, []byte(`{"no-such-credential": 12345, "`+instName+`": 0}`), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	r.srv.SetStaleFile(file)
-	r.get(instName)
-	r.ep.setAnswer(func(int64, *http.Request) (int, string) { return 400, `{"error":"invalid_grant"}` })
-	r.skew(2 * time.Hour)
-	r.get(instName)
-	if _, doc, body := getStatus(t, r.client); doc[instName].State != stateStale || doc[instName].Since == 0 {
-		t.Fatalf("a zero start on disk leaked into the episode: %q", body)
-	}
-	if m := readStaleFile(t, file); m["no-such-credential"] != 0 || m[instName] == 0 {
-		t.Fatalf("stale file after a write: %v", m)
+// Whatever an old stale file holds (garbage, a credential this server does not
+// serve, a zero start), the next episode starts fresh and the rewrite keeps
+// only served names.
+func TestStaleFileNeverInventsAnEpisode(t *testing.T) {
+	for name, disk := range map[string]string{
+		"garbage":          `not json`,
+		"unknown and zero": `{"no-such-credential": 12345, "` + instName + `": 0}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			r := newRig(t, seedTokens(3600))
+			file := filepath.Join(r.stateDir, "stale.json")
+			if err := os.WriteFile(file, []byte(disk), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			r.srv.SetStaleFile(file)
+			if _, doc, body := getStatus(t, r.client); doc[instName].State != stateOK || doc[instName].Since != 0 {
+				t.Fatalf("before any stale answer: %q", body)
+			}
+			r.get(instName)
+			r.refuseRefresh()
+			r.get(instName)
+			if _, doc, body := getStatus(t, r.client); doc[instName].State != stateStale || doc[instName].Since == 0 {
+				t.Fatalf("the old file leaked into the episode: %q", body)
+			}
+			if m := readStaleFile(t, file); len(m) != 1 || m[instName] == 0 {
+				t.Fatalf("stale file after a write: %v", m)
+			}
+		})
 	}
 }

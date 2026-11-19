@@ -18,7 +18,7 @@ let
     import os, pty, re, sys
     pid, fd = pty.fork()
     if pid == 0:
-        os.execvp("runuser", ["runuser", "-u", sys.argv[1], "--", "hush-cred", "login", "anthropic-work"])
+        os.execvp("runuser", ["runuser", "-u", sys.argv[1], "--", "hush-cred", "login", "anthropic-work"] + sys.argv[2:])
     buf = b""
     while b"code#state: " not in buf:
         try:

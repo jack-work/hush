@@ -59,6 +59,9 @@ type Config struct {
 	// Principals, when set, add one socket per principal beside the
 	// allow_user socket (which keeps serving every instance, as before).
 	Principals map[string]Principal `toml:"principals"`
+	// Systemd, when set, adds the LoadCredential socket: units granted by
+	// name receive a raw token from systemd itself.
+	Systemd *Systemd `toml:"systemd"`
 	// ConsentGrants is the path of a consent grants file ({"grants": [{id,
 	// principal, credential, expires_at, approved_by}]}), read at every use:
 	// a live row grants that credential to that principal beside the
@@ -121,6 +124,11 @@ func ParseConfig(data []byte) (*Config, error) {
 			return nil, err
 		}
 	}
+	if c.Systemd != nil {
+		if err := c.Systemd.validate(c.Instances); err != nil {
+			return nil, err
+		}
+	}
 	return &c, nil
 }
 
@@ -130,6 +138,9 @@ func (p Principal) validate(name string, instances map[string]Instance, consent 
 	}
 	if !instanceNameRE.MatchString(name) {
 		return fmt.Errorf("cred config: principal name %q must match %s", name, instanceNameRE)
+	}
+	if name == SystemdFDName {
+		return fail("the name is reserved for the systemd LoadCredential socket")
 	}
 	if len(p.Users) == 0 {
 		return fail("users is required")

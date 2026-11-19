@@ -153,6 +153,25 @@ let
       readOnly = true;
       default = L.stateDir;
     };
+
+    unitGrants = mkOption {
+      type = types.attrsOf (types.attrsOf types.str);
+      default = { };
+      example = { "keel-lieutenant.service".token = "ghe-read"; };
+      description = ''
+        LoadCredential grants by unit name: unitGrants."<unit>".<credential id> = "<instance>". The unit says
+        LoadCredential=<credential id>:${L.runDir}/systemd.sock and receives the raw token. The socket believes the unit name
+        only from systemd itself (peer uid 0). A refusal writes nothing, and systemd then starts the unit with an EMPTY
+        credential file: the consumer must treat an empty credential as a failure. Empty: no socket.
+      '';
+    };
+
+    systemdSocketPath = mkOption {
+      type = types.str;
+      readOnly = true;
+      default = "${L.runDir}/systemd.sock";
+      description = "The LoadCredential socket (0600 ${L.user}; systemd connects as root).";
+    };
   };
 
   hushCfg = config.services.hush;
@@ -210,6 +229,8 @@ let
       allow_user = owner.user;
     } // lib.optionalAttrs (principals != { }) {
       principals = lib.mapAttrs (_: principalToml) principals;
+    } // lib.optionalAttrs (cfg.unitGrants != { }) {
+      systemd = { socket = cfg.systemdSocketPath; units = cfg.unitGrants; };
     } // lib.optionalAttrs (cfg.consentGrants != null) {
       consent_grants = cfg.consentGrants;
     });
@@ -248,8 +269,24 @@ let
         FileDescriptorName = owner.fdName;
       };
     }; };
-    socketUnits = lib.attrNames ownerSocket ++ lib.attrNames principalSockets;
-    allSocketPaths = lib.optional (owner != null) owner.path ++ map (p: p.socketPath) (lib.attrValues principals);
+    systemdSocket = lib.optionalAttrs (cfg.unitGrants != { }) { ${L.socketUnit "loadcredential"} = {
+      wantedBy = [ "sockets.target" ];
+      listenStreams = [ cfg.systemdSocketPath ];
+      socketConfig = {
+        Service = "${L.service}.service";
+        FileDescriptorName = "loadcredential";
+        SocketUser = L.user;
+        SocketGroup = L.user;
+        # Only the system manager connects (root passes the mode); the server believes the unit name from uid 0 alone.
+        SocketMode = "0600";
+        DirectoryMode = "0755";
+      } // lib.optionalAttrs L.rebindSockets {
+        RemoveOnStop = true;
+      };
+    }; };
+    socketUnits = lib.attrNames ownerSocket ++ lib.attrNames principalSockets ++ lib.attrNames systemdSocket;
+    allSocketPaths = lib.optional (owner != null) owner.path ++ map (p: p.socketPath) (lib.attrValues principals)
+      ++ lib.optional (cfg.unitGrants != { }) cfg.systemdSocketPath;
 
     pinnedTokenUrl = {
       chatgpt = "https://auth.openai.com/oauth/token";
@@ -306,7 +343,14 @@ let
         assertion = owner != null || principals != { };
         message = "${L.option}: set allowUser or at least one principal";
       }
-    ] ++ lib.concatLists (lib.mapAttrsToList (pname: p: map (c: {
+      {
+        assertion = !(principals ? loadcredential);
+        message = "${L.option}: principal loadcredential is reserved for the LoadCredential socket";
+      }
+    ] ++ lib.concatLists (lib.mapAttrsToList (unit: grants: lib.mapAttrsToList (id: c: {
+      assertion = cfg.instances ? ${c};
+      message = "${L.option}: unitGrants.${unit}.${id} grants ${c}, which is not an instance";
+    }) grants) cfg.unitGrants) ++ lib.concatLists (lib.mapAttrsToList (pname: p: map (c: {
       assertion = cfg.instances ? ${c};
       message = "${L.option}: principal ${pname} grants ${c}, which is not an instance";
     }) p.credentials) principals) ++ lib.concatLists (lib.mapAttrsToList (name: c: map (b: let p = if b.hostPath == null then b.mountPoint else toString b.hostPath; in {
@@ -348,7 +392,7 @@ let
       };
     };
 
-    systemd.sockets = principalSockets // ownerSocket;
+    systemd.sockets = principalSockets // ownerSocket // systemdSocket;
 
     systemd.services.${L.service} = let
       sockets = map (u: "${u}.socket") socketUnits;

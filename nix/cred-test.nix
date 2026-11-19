@@ -2,6 +2,38 @@
 let
   common = import ./cred-test-common.nix { inherit pkgs; };
   inherit (common) recipient forbiddenIP ptyLogin;
+
+  # Connects to the LoadCredential socket the way systemd does (bound to "\0<random>/unit/<unit>/<id>"), or from an
+  # unbound address when no unit is given, and prints how many bytes came back.
+  lcPeer = pkgs.writeText "lc-peer.py" ''
+    import os, socket, sys
+    s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    if len(sys.argv) > 2:
+        s.bind(f"\0forged{os.getpid()}/unit/{sys.argv[2]}/{sys.argv[3]}")
+    s.settimeout(20)
+    s.connect(sys.argv[1])
+    got = b""
+    while True:
+        try:
+            chunk = s.recv(4096)
+        except ConnectionResetError:
+            break
+        if not chunk:
+            break
+        got += chunk
+    print(len(got))
+  '';
+
+  # A unit that reads credentials through the socket and copies what it got (possibly nothing) to /run/lc.
+  lcUnit = name: ids: {
+    serviceConfig = {
+      Type = "oneshot";
+      LoadCredential = map (id: "${id}:/run/hush/systemd.sock") ids;
+      ExecStart = "${pkgs.bash}/bin/bash -c '${pkgs.lib.concatMapStrings (id: "${pkgs.coreutils}/bin/cp %d/${id} /run/lc/${name}-${id}; ") ids}'";
+      RuntimeDirectory = "lc";
+      RuntimeDirectoryPreserve = true;
+    };
+  };
 in
 pkgs.testers.runNixOSTest {
   name = "hush";
@@ -36,7 +68,11 @@ pkgs.testers.runNixOSTest {
       instances.chatgpt-personal.kind = "chatgpt";
       # A principal with its own socket: outsider may read anthropic-work there and nothing else.
       principals.keel = { users = [ "outsider" ]; credentials = [ "anthropic-work" ]; };
+      # LoadCredential: lc-granted may read anthropic-work as "token" and nothing else; lc-ungranted has no grant.
+      unitGrants."lc-granted.service".token = "anthropic-work";
     };
+    systemd.services.lc-granted = lcUnit "granted" [ "token" "other" ];
+    systemd.services.lc-ungranted = lcUnit "ungranted" [ "token" ];
 
     systemd.services.local-http = {
       wantedBy = [ "multi-user.target" ];
@@ -80,7 +116,7 @@ pkgs.testers.runNixOSTest {
     endpoint.wait_for_unit("fake-endpoint.service")
     endpoint.wait_for_unit("dnsmasq.service")
     endpoint.wait_for_open_port(443)
-    for u in ["hush-fence.service", "dnsmasq.service", "hush-cred.socket", "hush-drop.socket", "hush-admin.socket", "hush-keel.socket", "hush.service", "local-http.service"]:
+    for u in ["hush-fence.service", "dnsmasq.service", "hush-cred.socket", "hush-drop.socket", "hush-admin.socket", "hush-keel.socket", "hush-loadcredential.socket", "hush.service", "local-http.service"]:
         minter.wait_for_unit(u)
     minter.wait_for_open_port(8080)
 
@@ -118,9 +154,9 @@ pkgs.testers.runNixOSTest {
     with subtest("(v) login reads code#state from the terminal"):
         fake("login_expires_in", 35)
         # login refuses while `cred serve` owns the state (.credential-owner.lock): stop the owner first, as an operator would.
-        minter.succeed("systemctl stop hush-cred.socket hush-drop.socket hush-admin.socket hush-keel.socket hush.service")
+        minter.succeed("systemctl stop hush-cred.socket hush-drop.socket hush-admin.socket hush-keel.socket hush-loadcredential.socket hush.service")
         print(minter.succeed("${pkgs.python3}/bin/python3 ${ptyLogin} hush"))
-        minter.succeed("systemctl start hush-cred.socket hush-drop.socket hush-admin.socket hush-keel.socket")
+        minter.succeed("systemctl start hush-cred.socket hush-drop.socket hush-admin.socket hush-keel.socket hush-loadcredential.socket")
         assert count("logins") == 1
         status, doc = cred("figaro", 200)
         assert doc["token"] == "at-login-1", doc
@@ -192,7 +228,8 @@ pkgs.testers.runNixOSTest {
         # The 35 s sign-in token is inside the serve floor by now, and /status never refreshes: "failing" is the honest state.
         assert doc["anthropic-work"]["state"] in ("ok", "failing") and doc["anthropic-work"]["expires_at"] > 0, doc
         assert doc["chatgpt-personal"]["state"] == "unminted", doc
-        assert "token" not in json.dumps({n: {k: v for k, v in e.items() if k != "kind"} for n, e in doc.items()}), doc
+        # No token value and no token field; the word itself may appear in a failing reason ("token expired ...").
+        assert "at-login-1" not in json.dumps(doc) and all("token" not in e for e in doc.values()), doc
         for user in ["figaro", "jack", "intruder"]:
             minter.fail(f"runuser -u {user} -- curl -s --unix-socket /run/hush/admin.sock http://m/status")
         status, doc = call("root", "admin", "GET", "/status")
@@ -256,5 +293,37 @@ pkgs.testers.runNixOSTest {
         listing = minter.succeed("restic -r /srv/restic --password-file /etc/restic-pw ls latest")
         assert "/var/lib/backup-control/present" in listing, "CONTROL: the backup missed /var/lib"
         assert "/var/lib/hush" not in listing, "the minter's state was backed up"
+
+    with subtest("LoadCredential socket: a granted unit gets the raw token; anything else gets nothing"):
+        # Last, on a fresh hour-long sign-in, so no refresh timing above depends on it.
+        fake("mode", "ok")
+        fake("login_expires_in", 3600)
+        minter.succeed("systemctl stop hush-cred.socket hush-drop.socket hush-admin.socket hush-keel.socket hush-loadcredential.socket hush.service")
+        print(minter.succeed("${pkgs.python3}/bin/python3 ${ptyLogin} hush --replace"))
+        minter.succeed("systemctl start hush-cred.socket hush-drop.socket hush-admin.socket hush-keel.socket hush-loadcredential.socket")
+        minter.succeed("test \"$(stat -c '%U %a' /run/hush/systemd.sock)\" = 'hush 600'")
+        minter.succeed("systemctl start lc-granted.service lc-ungranted.service")
+        got = minter.succeed("cat /run/lc/granted-token")
+        assert got == "at-login-2", got
+        # Refused: systemd starts the unit with an EMPTY credential file.
+        minter.succeed("test -e /run/lc/granted-other && test ! -s /run/lc/granted-other")
+        minter.succeed("test -e /run/lc/ungranted-token && test ! -s /run/lc/ungranted-token")
+        # Control: root (the manager's uid) with the granted unit's address is served.
+        assert minter.succeed("${pkgs.python3}/bin/python3 ${lcPeer} /run/hush/systemd.sock lc-granted.service token").strip() == "10"
+        # The same forged address from the hush uid (it owns the socket, so it can connect): the uid check refuses it.
+        assert minter.succeed("runuser -u hush -- ${pkgs.python3}/bin/python3 ${lcPeer} /run/hush/systemd.sock lc-granted.service token").strip() == "0"
+        # Root without systemd's address: nothing.
+        assert minter.succeed("${pkgs.python3}/bin/python3 ${lcPeer} /run/hush/systemd.sock").strip() == "0"
+        # Anyone else cannot connect at all (0600).
+        minter.fail("runuser -u figaro -- ${pkgs.python3}/bin/python3 ${lcPeer} /run/hush/systemd.sock lc-granted.service token")
+        journal = minter.succeed("journalctl -u hush.service -o cat --no-pager")
+        for line in ['systemd: delivered anthropic-work to lc-granted.service as "token"',
+                     'systemd: REFUSED lc-granted.service credential "other": no grant',
+                     'systemd: REFUSED lc-ungranted.service credential "token": no grant',
+                     "systemd: REFUSED uid 476 (only the system manager, uid 0)",
+                     "systemd: REFUSED a peer whose address is not systemd's /unit/<unit>/<id>",
+                     "cred: audit anthropic-work principal=systemd:lc-granted.service uid=0 -> 200"]:
+            assert line in journal, (line, journal)
+        assert "at-login-2" not in journal, "a token reached the journal"
   '';
 }

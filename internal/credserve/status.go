@@ -61,10 +61,18 @@ func (s *Server) status() map[string]credStatus {
 				st.State, st.ExpiresAt = stateOK, lease.ExpiresAt.Unix()
 			}
 		}
-		if st.State == stateStale {
+		// An episode ends only on confirmed recovery (ok here, or a served
+		// token). Unminted after a restart is no evidence: an open episode
+		// on disk still means a sign-in is needed.
+		switch st.State {
+		case stateStale:
 			st.Since = s.staleSince(name, now).Unix()
-		} else {
+		case stateOK:
 			s.clearStale(name)
+		case stateUnminted:
+			if t, ok := s.openStale(name); ok {
+				st.State, st.Reason, st.Since = stateStale, reasonSignIn, t.Unix()
+			}
 		}
 		out[name] = st
 	}
@@ -112,6 +120,16 @@ func (s *Server) staleSince(name string, now time.Time) time.Time {
 	return now
 }
 
+// openStale returns the start of name's open episode, if one is open.
+func (s *Server) openStale(name string) (time.Time, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.loadStaleLocked()
+	t, ok := s.staleAt[name]
+	return t, ok
+}
+
+// clearStale ends name's episode: called on confirmed recovery only.
 func (s *Server) clearStale(name string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

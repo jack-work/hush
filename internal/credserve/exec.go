@@ -187,6 +187,7 @@ func (s *Server) answerExec(w http.ResponseWriter, name string) {
 		s.writeExecFailure(w, name, err)
 		return
 	}
+	s.clearStale(name)
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "no-store")
 	_ = json.NewEncoder(w).Encode(struct {
@@ -201,6 +202,7 @@ func (s *Server) refreshExec(w http.ResponseWriter, name string, performed bool)
 		s.writeExecFailure(w, name, err)
 		return
 	}
+	s.clearStale(name)
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "no-store")
 	_ = json.NewEncoder(w).Encode(map[string]any{"ready": true, "refreshed": performed})

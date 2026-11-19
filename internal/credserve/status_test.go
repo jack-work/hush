@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/jack-work/hush/internal/oauth"
 )
@@ -191,6 +192,50 @@ func TestStaleFileNeverInventsAnEpisode(t *testing.T) {
 			if m := readStaleFile(t, file); len(m) != 1 || m[instName] == 0 {
 				t.Fatalf("stale file after a write: %v", m)
 			}
+		})
+	}
+}
+
+// An exec credential's episode ends only on confirmed recovery: a restart
+// before the next fetch keeps it, and a served token closes it so the next
+// sign-in failure is a new episode even with no /status poll in between.
+func TestExecStaleEpisodeEndsOnlyOnRecovery(t *testing.T) {
+	for name, run := range map[string]func(t *testing.T, e *erig, file string){
+		"restart before the first fetch": func(t *testing.T, e *erig, file string) {
+			e.do(http.MethodGet, "/cred/ado-feed")
+			before := e.srv.status()["ado-feed"]
+			restarted := NewServer(e.srv.cfg, nil, e.srv.allowUID, e.srv.logger)
+			restarted.SetStaleFile(file)
+			if after := restarted.status()["ado-feed"]; after.State != stateStale || after.Since != before.Since || before.Since == 0 {
+				t.Fatalf("restart lost the episode: before %+v after %+v disk %v", before, after, readStaleFile(t, file))
+			}
+		},
+		"stale, served, stale again": func(t *testing.T, e *erig, file string) {
+			now := time.Now()
+			e.srv.Now = func() time.Time { return now }
+			e.srv.MinRefreshInterval = 0
+			e.do(http.MethodGet, "/cred/ado-feed")
+			first := readStaleFile(t, file)["ado-feed"]
+			e.setMode("far")
+			if a := e.do(http.MethodGet, "/cred/ado-feed"); a.status != 200 {
+				t.Fatalf("recovery: %q", a.raw)
+			}
+			if m := readStaleFile(t, file); len(m) != 0 {
+				t.Fatalf("a served token left the episode open: %v", m)
+			}
+			now = now.Add(3 * time.Hour)
+			e.setMode("signin")
+			e.do(http.MethodGet, "/cred/ado-feed")
+			if second := e.srv.status()["ado-feed"].Since; first == 0 || second <= first {
+				t.Fatalf("two episodes collapsed: first %d second %d", first, second)
+			}
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			e := newExecRig(t, "signin")
+			file := filepath.Join(e.dir, "stale.json")
+			e.srv.SetStaleFile(file)
+			run(t, e, file)
 		})
 	}
 }

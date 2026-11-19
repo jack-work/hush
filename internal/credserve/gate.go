@@ -272,7 +272,7 @@ func (g *LoginGate) checkIDToken(token, nonce string, now time.Time) error {
 		return errors.New("id_token nonce does not match this sign-in")
 	case now.After(time.Unix(c.Exp, 0).Add(gateSkew)):
 		return errors.New("id_token expired")
-	case c.AuthTime == 0 || now.Sub(time.Unix(c.AuthTime, 0)) > g.maxAge+gateSkew:
+	case now.Sub(time.Unix(c.AuthTime, 0)) > g.maxAge+gateSkew: // a missing auth_time is 1970: stale
 		return fmt.Errorf("the sign-in is not fresh (auth_time older than %s)", g.maxAge)
 	}
 	return nil

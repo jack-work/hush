@@ -22,143 +22,109 @@ users = ["me"]
 credentials = ["copilot-work"]
 `
 
-func writeGrants(t *testing.T, path string, rows ...ConsentGrant) {
-	t.Helper()
-	b, err := json.Marshal(map[string]any{"grants": rows})
-	if err != nil {
-		t.Fatal(err)
-	}
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, b, 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Rename(tmp, path); err != nil {
-		t.Fatal(err)
-	}
+// grantRow is a consent grant for box (or another principal) that is live for an hour,
+// or expired when ttl is negative.
+func grantRow(principal, credential string, ttl time.Duration) ConsentGrant {
+	return ConsentGrant{ID: "g-" + principal + "-" + credential, Principal: principal, Credential: credential,
+		ExpiresAt: float64(time.Now().Add(ttl).Unix()), ApprovedBy: "boss"}
 }
 
-func consentRig(t *testing.T) (*prig, string) {
+// grantsFile is a fixture: the grants file's raw bytes (nil = no file).
+func grantsFile(rows ...ConsentGrant) []byte {
+	b, _ := json.Marshal(map[string]any{"grants": rows})
+	return b
+}
+
+// consentRig serves boxPrincipal with consent grants read from a temp file; put replaces the file atomically.
+func consentRig(t *testing.T) (p *prig, put func([]byte)) {
 	t.Helper()
-	p := newPrincipalRig(t, "", boxPrincipal)
+	p = newPrincipalRig(t, "", boxPrincipal)
 	path := filepath.Join(t.TempDir(), "grants.json")
 	p.cfg.ConsentGrants = path
-	return p, path
-}
-
-func live(principal, credential string) ConsentGrant {
-	return ConsentGrant{ID: "g-" + principal + "-" + credential, Principal: principal, Credential: credential,
-		ExpiresAt: float64(time.Now().Add(time.Hour).Unix()), ApprovedBy: "boss"}
-}
-
-func TestConsentGrantServesALiveGrantAndAuditsIt(t *testing.T) {
-	p, path := consentRig(t)
-	writeGrants(t, path, live("box", instName))
-	a := p.request("box", http.MethodGet, "/cred/"+instName)
-	if a.status != 200 || a.Token != "at-seed" {
-		t.Fatalf("live consent grant: got %d %q", a.status, a.raw)
-	}
-	logs := p.logs.String()
-	want := fmt.Sprintf(`cred: consent-grant use "g-box-%s" principal=box credential=%s`, instName, instName)
-	if !strings.Contains(logs, want) || !strings.Contains(logs, `approved_by="boss"`) || !strings.Contains(logs, "-> 200") {
-		t.Fatalf("no consent-grant audit line: %q", logs)
-	}
-	if strings.Contains(logs, "at-seed") {
-		t.Fatalf("a token reached the log: %q", logs)
+	return p, func(raw []byte) {
+		t.Helper()
+		if raw == nil {
+			_ = os.Remove(path)
+			return
+		}
+		if err := os.WriteFile(path+".tmp", raw, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Rename(path+".tmp", path); err != nil {
+			t.Fatal(err)
+		}
 	}
 }
 
-func TestConsentGrantRefusals(t *testing.T) {
-	expired := live("box", instName)
-	expired.ExpiresAt = float64(time.Now().Add(-time.Second).Unix())
+func TestConsentGrants(t *testing.T) {
 	for _, c := range []struct {
-		name string
-		rows []ConsentGrant
+		name    string
+		file    []byte
+		cred    string
+		setup   func(*prig)
+		status  int
+		errCode string
+		token   string
+		used    bool   // a consent-grant use line is logged
+		logs    string // and this text too
 	}{
-		{"expired", []ConsentGrant{expired}},
-		{"other principal", []ConsentGrant{live("someone-else", instName)}},
-		{"other credential", []ConsentGrant{live("box", "something-else")}},
-		{"empty file", nil},
+		{name: "live grant serves and is audited", file: grantsFile(grantRow("box", instName, time.Hour)),
+			status: 200, token: "at-seed", used: true, logs: fmt.Sprintf(`cred: consent-grant use "g-box-%s" principal=box credential=%s`, instName, instName)},
+		{name: "expired grant", file: grantsFile(grantRow("box", instName, -time.Second)), status: 403, errCode: "not_granted"},
+		{name: "grant for another principal", file: grantsFile(grantRow("someone-else", instName, time.Hour)), status: 403, errCode: "not_granted"},
+		{name: "grant for another credential", file: grantsFile(grantRow("box", "something-else", time.Hour)), status: 403, errCode: "not_granted"},
+		{name: "empty file", file: grantsFile(), status: 403, errCode: "not_granted"},
+		{name: "no file", file: nil, status: 403, errCode: "not_granted", logs: "consent grants unreadable"},
+		{name: "malformed file", file: []byte(`{"grants": [`), status: 403, errCode: "not_granted", logs: "consent grants unreadable"},
+		{name: "past expires_at by the clock, row still in the file", file: grantsFile(grantRow("box", instName, time.Hour)),
+			setup: func(p *prig) { p.srv.Now = func() time.Time { return time.Now().Add(2 * time.Hour) } }, status: 403, errCode: "not_granted"},
+		{name: "consent grants off ignores the file", file: grantsFile(grantRow("box", instName, time.Hour)),
+			setup: func(p *prig) { p.cfg.ConsentGrants = "" }, status: 403, errCode: "not_granted"},
+		{name: "grant for a name that is no instance", file: grantsFile(grantRow("box", "not-an-instance", time.Hour)),
+			cred: "not-an-instance", status: 404, errCode: "unknown_credential", used: true},
+		// copilot-work is granted by config and not signed in: past the grant check, not a consent use.
+		{name: "static grant is not a consent use", file: grantsFile(), cred: "copilot-work", status: 503, errCode: "credential_stale"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			p, path := consentRig(t)
-			writeGrants(t, path, c.rows...)
-			a := p.request("box", http.MethodGet, "/cred/"+instName)
-			if a.status != http.StatusForbidden || a.Error != "not_granted" || a.Token != "" {
-				t.Fatalf("got %d %q, want 403 not_granted", a.status, a.raw)
+			p, put := consentRig(t)
+			put(c.file)
+			if c.setup != nil {
+				c.setup(p)
 			}
-			if strings.Contains(p.logs.String(), "consent-grant use") {
-				t.Fatalf("a refused request was logged as a grant use: %q", p.logs.String())
+			cred := c.cred
+			if cred == "" {
+				cred = instName
+			}
+			a := p.request("box", http.MethodGet, "/cred/"+cred)
+			if a.status != c.status || a.Error != c.errCode || a.Token != c.token {
+				t.Fatalf("got %d %q", a.status, a.raw)
+			}
+			logs := p.logs.String()
+			if strings.Contains(logs, "consent-grant use") != c.used || !strings.Contains(logs, c.logs) {
+				t.Fatalf("logs (want use=%v, %q): %q", c.used, c.logs, logs)
+			}
+			if strings.Contains(logs, "at-seed") {
+				t.Fatalf("a token reached the log: %q", logs)
 			}
 		})
 	}
 }
 
+// The file is read at every use: no restart between a grant appearing and expiring.
 func TestConsentGrantsAreReadAtEveryUse(t *testing.T) {
-	p, path := consentRig(t)
-	if a := p.request("box", http.MethodGet, "/cred/"+instName); a.status != http.StatusForbidden {
-		t.Fatalf("no grants file: got %d %q", a.status, a.raw)
-	}
-	writeGrants(t, path, live("box", instName))
-	if a := p.request("box", http.MethodGet, "/cred/"+instName); a.status != 200 || a.Token != "at-seed" {
-		t.Fatalf("grant written after start: got %d %q", a.status, a.raw)
-	}
-	g := live("box", instName)
-	g.ExpiresAt = float64(time.Now().Add(-time.Minute).Unix())
-	writeGrants(t, path, g)
-	if a := p.request("box", http.MethodGet, "/cred/"+instName); a.status != http.StatusForbidden || a.Token != "" {
-		t.Fatalf("grant expired in the file: got %d %q", a.status, a.raw)
-	}
-}
-
-func TestConsentGrantExpiresByTheClockNotTheFile(t *testing.T) {
-	p, path := consentRig(t)
-	writeGrants(t, path, live("box", instName))
-	p.srv.Now = func() time.Time { return time.Now().Add(2 * time.Hour) }
-	if a := p.request("box", http.MethodGet, "/cred/"+instName); a.status != http.StatusForbidden {
-		t.Fatalf("a grant past expires_at still in the file: got %d %q", a.status, a.raw)
-	}
-}
-
-func TestUnreadableConsentGrantsGrantNothing(t *testing.T) {
-	p, path := consentRig(t)
-	if err := os.WriteFile(path, []byte(`{"grants": [`), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if a := p.request("box", http.MethodGet, "/cred/"+instName); a.status != http.StatusForbidden {
-		t.Fatalf("malformed grants file: got %d %q", a.status, a.raw)
-	}
-	if !strings.Contains(p.logs.String(), "consent grants unreadable") {
-		t.Fatalf("no log of the unreadable file: %q", p.logs.String())
-	}
-}
-
-func TestConsentGrantsOffIgnoresTheFile(t *testing.T) {
-	p, path := consentRig(t)
-	writeGrants(t, path, live("box", instName))
-	p.cfg.ConsentGrants = ""
-	if a := p.request("box", http.MethodGet, "/cred/"+instName); a.status != http.StatusForbidden {
-		t.Fatalf("consent_grants unset: got %d %q", a.status, a.raw)
-	}
-}
-
-func TestConsentGrantForANonInstanceIsUnknown(t *testing.T) {
-	p, path := consentRig(t)
-	writeGrants(t, path, live("box", "tomb-live-notes"))
-	a := p.request("box", http.MethodGet, "/cred/tomb-live-notes")
-	if a.status != http.StatusNotFound || a.Error != "unknown_credential" {
-		t.Fatalf("grant for a name that is no instance: got %d %q", a.status, a.raw)
-	}
-}
-
-func TestStaticGrantStillServesWithConsentOn(t *testing.T) {
-	p, path := consentRig(t)
-	writeGrants(t, path)
-	// copilot-work is granted by config; with no sign-in it is not a 403.
-	if a := p.request("box", http.MethodGet, "/cred/copilot-work"); a.status == http.StatusForbidden {
-		t.Fatalf("static grant refused: got %d %q", a.status, a.raw)
-	}
-	if strings.Contains(p.logs.String(), "consent-grant use") {
-		t.Fatalf("a static grant was logged as a consent grant use: %q", p.logs.String())
+	p, put := consentRig(t)
+	for _, step := range []struct {
+		file   []byte
+		status int
+	}{
+		{nil, 403},
+		{grantsFile(grantRow("box", instName, time.Hour)), 200},
+		{grantsFile(grantRow("box", instName, -time.Minute)), 403},
+	} {
+		put(step.file)
+		if a := p.request("box", http.MethodGet, "/cred/"+instName); a.status != step.status {
+			t.Fatalf("file %s: got %d %q, want %d", step.file, a.status, a.raw, step.status)
+		}
 	}
 }
 
@@ -167,12 +133,16 @@ func TestConsentGrantsConfig(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cfg := func(consent string) string {
-		s := fmt.Sprintf("recipient = %q\n", key.Recipient().String())
-		if consent != "" {
-			s += fmt.Sprintf("consent_grants = %q\n", consent)
+	for _, c := range []struct{ consent, wantErr string }{
+		{"/var/lib/grants/grants.json", ""},
+		{"", "credentials is required"},
+		{"grants.json", "absolute path"},
+	} {
+		head := fmt.Sprintf("recipient = %q\n", key.Recipient().String())
+		if c.consent != "" {
+			head += fmt.Sprintf("consent_grants = %q\n", c.consent)
 		}
-		return s + `
+		_, err := ParseConfig([]byte(head + `
 [instances.copilot-work]
 kind = "copilot"
 device_url = "https://github.example/login/device/code"
@@ -182,15 +152,9 @@ client_id = "Iv1.x"
 
 [principals.box]
 users = ["me"]
-`
-	}
-	if _, err := ParseConfig([]byte(cfg("/var/lib/grants/grants.json"))); err != nil {
-		t.Fatalf("a consent-only principal with consent_grants: %v", err)
-	}
-	if _, err := ParseConfig([]byte(cfg(""))); err == nil || !strings.Contains(err.Error(), "credentials is required") {
-		t.Fatalf("a principal with nothing and no consent_grants: got %v", err)
-	}
-	if _, err := ParseConfig([]byte(cfg("grants.json"))); err == nil || !strings.Contains(err.Error(), "absolute path") {
-		t.Fatalf("a relative consent_grants: got %v", err)
+`))
+		if c.wantErr == "" && err != nil || c.wantErr != "" && (err == nil || !strings.Contains(err.Error(), c.wantErr)) {
+			t.Fatalf("consent_grants %q: got %v, want %q", c.consent, err, c.wantErr)
+		}
 	}
 }

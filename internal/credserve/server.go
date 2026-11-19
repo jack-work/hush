@@ -15,6 +15,8 @@ import (
 	"sync"
 	"time"
 
+	"filippo.io/age"
+
 	"github.com/jack-work/hush/internal/oauth"
 )
 
@@ -43,6 +45,9 @@ type Server struct {
 	pending     map[string]*remoteLogin
 	exec        execState
 	staleAt     map[string]time.Time
+	sshCAMu     sync.Mutex
+	sshCADir    string
+	sshCAIDs    []age.Identity
 	connMu      sync.Mutex
 	connections sync.WaitGroup
 	conns       map[net.Conn]bool
@@ -133,6 +138,9 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if s.refreshRoute(w, r) {
 		return
 	}
+	if s.sshCARoute(w, r, "owner", func(string) bool { return true }) {
+		return
+	}
 	name, found := strings.CutPrefix(r.URL.Path, "/cred/")
 	if !found || name == "" || strings.Contains(name, "/") {
 		writeError(w, http.StatusNotFound, "not_found", "GET /cred/<name>")
@@ -212,6 +220,10 @@ func (s *Server) refreshRoute(w http.ResponseWriter, r *http.Request) bool {
 }
 
 func (s *Server) answer(w http.ResponseWriter, name string) {
+	if s.cfg.Instances[name].Kind == KindSSHCA {
+		writeError(w, http.StatusNotFound, "not_a_token", "an ssh-ca instance serves /ssh-ca/<name>/..., never a token")
+		return
+	}
 	if s.cfg.Instances[name].Kind == KindExec {
 		s.answerExec(w, name)
 		return

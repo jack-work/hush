@@ -41,6 +41,9 @@ type Instance struct {
 	// Command and Timeout belong to kind "exec" only.
 	Command []string `toml:"command"`
 	Timeout string   `toml:"timeout"`
+	// Validity and GrantsFile belong to kind "ssh-ca" only.
+	Validity   string `toml:"validity"`
+	GrantsFile string `toml:"grants_file"`
 }
 
 type Principal struct {
@@ -153,6 +156,12 @@ func (in Instance) validate(name string) error {
 	fail := func(format string, a ...any) error {
 		return fmt.Errorf("cred config: instance %s: "+format, append([]any{name}, a...)...)
 	}
+	if in.Kind == KindSSHCA {
+		return in.validateSSHCA(name)
+	}
+	if in.Validity != "" || in.GrantsFile != "" {
+		return fail("validity and grants_file belong to kind %q", KindSSHCA)
+	}
 	if in.Kind == KindExec {
 		return in.validateExec(name)
 	}
@@ -189,7 +198,7 @@ func (in Instance) validate(name string) error {
 			return fail("authorize_url and redirect_uri belong to kind %q", KindRefreshToken)
 		}
 	default:
-		return fail("kind must be %q, %q, %q, %q or %q, not %q", KindAnthropic, KindRefreshToken, KindCopilot, KindChatGPT, KindExec, in.Kind)
+		return fail("kind must be %q, %q, %q, %q, %q or %q, not %q", KindAnthropic, KindRefreshToken, KindCopilot, KindChatGPT, KindExec, KindSSHCA, in.Kind)
 	}
 	for key, raw := range need {
 		if raw == "" {

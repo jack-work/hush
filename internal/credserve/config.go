@@ -74,6 +74,9 @@ type Config struct {
 	// OverlayAdmin, when set, adds the socket that writes the runtime overlay
 	// (temporary grants and suspensions). No other socket writes it.
 	OverlayAdmin *OverlayAdmin `toml:"overlay_admin"`
+	// LoginGate, when set, gates `hush cred login` on an administrator's
+	// sign-in at an OpenID provider (see LoginGate).
+	LoginGate *LoginGate `toml:"login_gate"`
 
 	recipient age.Recipient
 }
@@ -138,6 +141,11 @@ func ParseConfig(data []byte) (*Config, error) {
 	}
 	if a := c.OverlayAdmin; a != nil && (len(a.Users) == 0 || slices.Contains(a.Users, "") || !filepath.IsAbs(a.Socket)) {
 		return nil, errors.New("cred config: overlay_admin needs users and an absolute socket path")
+	}
+	if c.LoginGate != nil {
+		if err := c.LoginGate.validate(); err != nil {
+			return nil, err
+		}
 	}
 	return &c, nil
 }
@@ -286,6 +294,13 @@ func (c *Config) EgressHosts() []string {
 				continue
 			}
 			seen[hostPort(u)] = true
+		}
+	}
+	if c.LoginGate != nil {
+		for _, raw := range c.LoginGate.egressURLs() {
+			if u, err := url.Parse(raw); err == nil {
+				seen[hostPort(u)] = true
+			}
 		}
 	}
 	out := make([]string, 0, len(seen))

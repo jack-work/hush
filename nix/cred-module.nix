@@ -120,6 +120,22 @@ let
       description = "Absolute path of a consent grants file ({\"grants\": [{id, principal, credential, expires_at, approved_by}]}), read at every request: a live row grants that credential to that principal beside its credentials list, audited per use. The minter's user must be able to read it. null: no consent grants.";
     };
 
+    loginGate = mkOption {
+      type = types.nullOr (types.submodule {
+        options = {
+          issuer = mkOption { type = types.str; description = "OpenID issuer URL (https); its discovery names the authorize, token and userinfo endpoints."; };
+          clientId = mkOption { type = types.str; description = "Public OAuth2 client (PKCE S256)."; };
+          group = mkOption { type = types.str; description = "Userinfo group the administrator must be in (name or name@domain)."; };
+          redirectUri = mkOption { type = types.str; description = "Registered redirect: the code relay's callback."; };
+          relay = mkOption { type = types.str; description = "GET <relay>?state=... answers the sign-in's code."; };
+          maxAge = mkOption { type = types.str; default = "5m"; description = "Oldest accepted auth_time."; };
+          wait = mkOption { type = types.str; default = "5m"; description = "How long login waits for the sign-in."; };
+        };
+      });
+      default = null;
+      description = "Gate `cred login` on a fresh administrator sign-in at an OpenID provider, before the credential's own login. null: no gate.";
+    };
+
     recipient = mkOption {
       type = types.strMatching "age1[0-9a-z]+";
       description = "Public half of the identity: login encrypts to it without holding the key.";
@@ -259,6 +275,13 @@ let
       consent_grants = cfg.consentGrants;
     } // lib.optionalAttrs (cfg.overlayAdminUsers != [ ]) {
       overlay_admin = { socket = cfg.overlayAdminSocketPath; users = cfg.overlayAdminUsers; };
+    } // lib.optionalAttrs (cfg.loginGate != null) {
+      login_gate = with cfg.loginGate; {
+        inherit issuer group relay wait;
+        client_id = clientId;
+        redirect_uri = redirectUri;
+        max_age = maxAge;
+      };
     });
 
     setfacl = "${pkgs.acl}/bin/setfacl";

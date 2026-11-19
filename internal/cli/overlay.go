@@ -75,6 +75,9 @@ func init() {
 	credCmd.AddCommand(credOverlayCmd)
 }
 
+// overlayNow is the clock a grant's expiry is counted from (tests pin it).
+var overlayNow = time.Now
+
 // overlayClient is one admin socket session: its config and, after a sign-in,
 // the bearer every write carries.
 type overlayClient struct {
@@ -197,7 +200,7 @@ func runOverlayAdd(cmd *cobra.Command, path string, args []string) error {
 	}
 	req := map[string]any{"subject": args[0], "grant": args[1], "reason": reason}
 	if dur > 0 {
-		req["expires_at"] = time.Now().Add(dur).UTC()
+		req["expires_at"] = overlayNow().Add(dur).UTC()
 	}
 	var e policy.Entry
 	if err := o.do(cmd.Context(), http.MethodPost, path, req, &e); err != nil {

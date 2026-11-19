@@ -340,35 +340,44 @@ func TestOverlayWritesNeedTheGateSignIn(t *testing.T) {
 			return 404, `{}`
 		})
 	})
+	const signIn = `{"error":"sign_in_required","reason":"an overlay write needs the login gate's sign-in"}` + "\n"
 	for _, c := range []struct {
-		name, method, path, bearer string
-		status                     int
+		name, method, path, auth string
+		status                   int
+		raw                      string // the exact answer body ("" = not pinned: a created entry)
 	}{
-		{"read needs no sign-in", http.MethodGet, overlayReadPath, "", 200},
-		{"write without a sign-in", http.MethodPost, grantsPath, "", 401},
-		{"write with a dead token", http.MethodPost, grantsPath, "tok-expired", 403},
-		{"write by a non-member", http.MethodPost, suspensionsPath, "tok-other", 403},
-		{"delete without a sign-in", http.MethodDelete, grantsPath + "/0123456789abcdef", "", 401},
-		{"write by a member", http.MethodPost, grantsPath, "tok-admin", 201},
+		{"a read needs no sign-in", http.MethodGet, overlayReadPath, "", 200, ""},
+		{"a write without a sign-in", http.MethodPost, grantsPath, "", 401, signIn},
+		{"an empty bearer", http.MethodPost, grantsPath, "Bearer ", 401, signIn},
+		{"a lowercase scheme", http.MethodPost, grantsPath, "bearer tok-admin", 401, signIn},
+		{"another scheme", http.MethodPost, grantsPath, "Basic dG9rLWFkbWlu", 401, signIn},
+		{"a delete without a sign-in", http.MethodDelete, grantsPath + "/0123456789abcdef", "", 401, signIn},
+		{"a token the provider no longer honours", http.MethodPost, grantsPath, "Bearer tok-expired", 403,
+			`{"error":"forbidden","reason":"login gate: userinfo 401: the provider refused the token"}` + "\n"},
+		{"a doubled scheme", http.MethodPost, grantsPath, "Bearer Bearer tok-admin", 403,
+			`{"error":"forbidden","reason":"login gate: userinfo 401: the provider refused the token"}` + "\n"},
+		{"a non-member", http.MethodPost, suspensionsPath, "Bearer tok-other", 403,
+			`{"error":"forbidden","reason":"login gate: eve is not in hush-admin"}` + "\n"},
+		{"a member", http.MethodPost, grantsPath, "Bearer tok-admin", 201, ""},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			var h map[string]string
-			if c.bearer != "" {
-				h = map[string]string{"Authorization": "Bearer " + c.bearer}
+			if c.auth != "" {
+				h = map[string]string{"Authorization": c.auth}
 			}
 			body := ""
 			if c.method == http.MethodPost {
 				body = oneHour
 			}
 			a := p.call("admin", c.method, c.path, body, h)
-			if a.status != c.status {
-				t.Fatalf("got %d %q, want %d", a.status, a.raw, c.status)
+			if a.status != c.status || c.raw != "" && a.raw != c.raw {
+				t.Fatalf("%s: got %d %q, want %d %q", c.name, a.status, a.raw, c.status, c.raw)
 			}
 			if c.status == 201 {
 				var e policy.Entry
 				_ = json.Unmarshal([]byte(a.raw), &e)
 				if want := fmt.Sprintf("admin:%d:jack", os.Getuid()); e.ApprovedBy != want {
-					t.Fatalf("approved_by %q, want %q", e.ApprovedBy, want)
+					t.Fatalf("%s: approved_by %q, want %q", c.name, e.ApprovedBy, want)
 				}
 			}
 		})

@@ -213,6 +213,23 @@ func (r *rig) skew(d time.Duration) {
 	r.srv.Now = func() time.Time { return time.Now().Add(d) }
 }
 
+// refuseRefresh makes the token endpoint reject the grant and moves the
+// clock past the refresh point, so the next read answers credential_stale.
+func (r *rig) refuseRefresh() {
+	r.ep.setAnswer(func(int64, *http.Request) (int, string) { return 400, `{"error":"invalid_grant"}` })
+	r.skew(2 * time.Hour)
+}
+
+// signIn stores tok as a new sign-in on disk, as `hush cred login` does.
+func (r *rig) signIn(tok oauth.Tokens) {
+	r.t.Helper()
+	login := oauth.NewManager(r.stateDir, nil, r.key.Recipient(), log.New(io.Discard, "", 0))
+	if err := login.Register(r.cfg.Instances[instName].OAuthConfig(instName), tok); err != nil {
+		r.t.Fatal(err)
+	}
+	login.Stop()
+}
+
 func seedTokens(expiresIn int) oauth.Tokens {
 	return oauth.Tokens{AccessToken: "at-seed", RefreshToken: "rt-canary-seed-0123456789", ExpiresIn: expiresIn}
 }
@@ -376,11 +393,7 @@ func TestRefusedRefreshAnswersSignInNeeded(t *testing.T) {
 		t.Fatalf("a refused credential kept POSTing: %d", p)
 	}
 
-	login := oauth.NewManager(r.stateDir, nil, r.key.Recipient(), log.New(io.Discard, "", 0))
-	if err := login.Register(r.cfg.Instances[instName].OAuthConfig(instName), oauth.Tokens{AccessToken: "at-relogin", RefreshToken: "rt-relogin-abcdefgh", ExpiresIn: 3600}); err != nil {
-		t.Fatal(err)
-	}
-	login.Stop()
+	r.signIn(oauth.Tokens{AccessToken: "at-relogin", RefreshToken: "rt-relogin-abcdefgh", ExpiresIn: 3600})
 	r.skew(0)
 	if a := r.get(instName); a.status != 200 || a.Token != "at-relogin" {
 		t.Fatalf("a new sign-in on disk was not picked up: %q\n%s", a.raw, r.logs.String())
@@ -392,11 +405,7 @@ func TestFirstSignInIsPickedUpWithoutARestart(t *testing.T) {
 	if a := r.get(instName); a.status != 503 || a.Reason != "sign-in needed" {
 		t.Fatalf("an instance never signed in answered %q", a.raw)
 	}
-	login := oauth.NewManager(r.stateDir, nil, r.key.Recipient(), log.New(io.Discard, "", 0))
-	if err := login.Register(r.cfg.Instances[instName].OAuthConfig(instName), seedTokens(3600)); err != nil {
-		t.Fatal(err)
-	}
-	login.Stop()
+	r.signIn(seedTokens(3600))
 	if a := r.get(instName); a.status != 200 || a.Token != "at-seed" {
 		t.Fatalf("got %q", a.raw)
 	}

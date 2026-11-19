@@ -21,9 +21,9 @@
       overlays.default = final: prev: {
         hush = final.buildGoModule rec {
           pname = "hush";
-          version = "0.17.0";
+          version = "0.18.0";
           src = self;
-          vendorHash = "sha256-lBR9vKupRfWpkSTZN0UZRBXWRsTvWRTsGXCmzaWwSZs=";
+          vendorHash = "sha256-/UUCtv5cvtKImWE1rh89DMwHS2qKN0pRCyKFz3dxlYA=";
           subPackages = [ "." ];
           env.CGO_ENABLED = 0;
 
@@ -122,12 +122,15 @@
 
       nixosModules.hush-cred = self.nixosModules.hush;
 
+      nixosModules.hush-workload = import ./nix/workload-module.nix self;
+
       checks.x86_64-linux = let
         pkgs = nixpkgs.legacyPackages.x86_64-linux;
       in {
         cred-vm = import ./nix/cred-test.nix { inherit pkgs self; };
         cred-no-container = import ./nix/cred-no-container.nix { inherit pkgs self nixpkgs; };
         cred-rename-vm = import ./nix/cred-rename-test.nix { inherit pkgs self; };
+        workload-vm = import ./nix/workload-test.nix { inherit pkgs self; };
       };
 
       devShells = forAllSystems ({ pkgs }: let

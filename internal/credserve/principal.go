@@ -122,10 +122,7 @@ func (s *Server) servePrincipal(w http.ResponseWriter, r *http.Request, name str
 		// A consent grant use is always audited, with the grant id and its approver. Never the token.
 		rec := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
 		w = rec
-		defer func() {
-			s.logger.Printf("cred: consent-grant use %q principal=%s credential=%s uid=%d approved_by=%q expires_at=%d -> %d",
-				grant.ID, name, cred, uid, grant.ApprovedBy, int64(grant.ExpiresAt), rec.status)
-		}()
+		defer func() { s.logConsentUse(grant, name, cred, uid, rec.status) }()
 		if _, ok := s.cfg.Instances[cred]; !ok {
 			writeError(w, http.StatusNotFound, "unknown_credential", "no such credential")
 			return

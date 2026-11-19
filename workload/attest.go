@@ -12,10 +12,11 @@ import (
 var ErrUnattested = errors.New("unattested")
 
 type Peer struct {
-	PID    int
-	UID    uint32
-	Cgroup string
-	Mixed  bool
+	PID     int
+	UID     uint32
+	Cgroup  string
+	Mixed   bool
+	Machine *Machine // set when Cgroup lies in a machine unit (MachineOf)
 }
 
 type Attestor func(conn net.Conn) (Peer, error)

@@ -19,6 +19,7 @@ A SPIFFE ID is `spiffe://<trust domain>/<path>`.
 | unit | `/node/<node>/unit/<systemd unit>` | a process attested to a system unit on that node |
 | instance | `/node/<node>/unit/<template>.<type>/<instance>` | a process in an instanced unit (`figaro-valet@gluck.service` is `/unit/figaro-valet.service/gluck`); an instance that is not a plain segment falls back to the uid identity |
 | uid | `/node/<node>/uid/<uid>` | a process attested only by its uid |
+| sandbox | `/node/<node>/unit/<template>.service/<name>` | a process in the payload of a sandbox machine (section 1.1); the instance form, with the machine's `-g<generation>` stripped |
 | figaro | `/node/<node>/figaro/<aria id>` | a figaro, when the node's figaro vouches for it |
 
 A unit identity goes only to a caller whose uid is the only uid running in that unit's cgroup tree; a user that `su`s inside a root unit, or any process in a unit that mixes uids, gets its uid identity instead.
@@ -26,6 +27,18 @@ A unit identity goes only to a caller whose uid is the only uid running in that 
 Every workload identity sits under the node that issued it. A node's intermediate signs only its own subtree, and a node's JWT key speaks only for its own subtree; hush's verifier refuses an SVID whose path is outside `/node/<issuer's node>/`. That scoping is enforced by hush's verifier (`svid`), not by the PKI: X.509 name constraints cannot constrain URI paths, so a stock SPIFFE verifier would accept a compromised node's SVID for another node. Verify with `svid` wherever the node matters.
 
 A unit identity is held by a uid: any process of that uid that can ptrace the unit (kernel.yama.ptrace_scope 0) can act as it. Run units that hold identities as their own uid (DynamicUser).
+
+### 1.1 Sandbox identities (policy `node+machines`)
+
+A sandbox is a systemd-nspawn machine run by a template unit, `/machine.slice/<template>@<name>-g<generation>.service`, in a fixed user-namespace range. With `hush workload serve --policy node+machines --machines <file>`, a caller gets `/node/<node>/unit/<template>.service/<name>` when all of these hold:
+
+1. its pidfd is alive after the reads;
+2. its cgroup is under `<unit>/payload/` (never `supervisor` or `.control`), and systemd-machined holds machine `<name>-g<generation>` with that unit (asked over D-Bus, not inferred from the cgroup);
+3. the machine leader's `uid_map` is exactly one range, `0 <base + k*size> <size>`, where `k` is the sandbox's in the map;
+4. the caller's uid, and the uid of every live process under `<unit>/payload/`, lies in that range;
+5. `<name>` is in the map.
+
+The map file: `{"template", "base", "size", "machines": {"<name>": {"id", "k"}}}`; a name may not end in `-g<digits>`, and no two names share a `k`. A caller in a machine unit of the map's template that fails any rule is refused (`403 unattested`), never given a uid identity; every other caller is policy `node`'s. The identity is keyed on the unit name and survives rebuilds (a new generation) and restarts; the uid range is a cross-check, because a retired sandbox's `k` is reused by the next one.
 
 ## 2. Keys and certificates
 

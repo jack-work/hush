@@ -31,6 +31,14 @@ pkgs.testers.runNixOSTest {
     };
     users.users.jack = { isNormalUser = true; uid = 1000; };
     environment.systemPackages = [ self.packages.${pkgs.stdenv.hostPlatform.system}.default pkgs.openssl ];
+    systemd.services."inst@" = {
+      serviceConfig = {
+        Type = "oneshot";
+        DynamicUser = true;
+        StateDirectory = "inst-%i";
+        ExecStart = "${hush} workload x509 --trust-domain kelliher /var/lib/inst-%i/svid";
+      };
+    };
     systemd.services.demo = {
       serviceConfig = {
         Type = "oneshot";
@@ -48,6 +56,10 @@ pkgs.testers.runNixOSTest {
     with subtest("(i) a system unit gets its unit identity"):
         spain.succeed("systemctl start demo.service")
         spain.succeed("openssl x509 -in /var/lib/demo/svid/svid.pem -noout -ext subjectAltName | grep -F 'URI:spiffe://kelliher/node/spain/unit/demo.service'")
+
+    with subtest("(i-b) an instanced unit gets its template and instance"):
+        spain.succeed("systemctl start inst@gluck.service")
+        spain.succeed("openssl x509 -in /var/lib/inst-gluck/svid/svid.pem -noout -ext subjectAltName | grep -F 'URI:spiffe://kelliher/node/spain/unit/inst.service/gluck'")
 
     with subtest("(ii) a user inside a root unit (su from the test backdoor) gets its uid identity, not the unit's, and a JWT-SVID"):
         out = spain.succeed("su - jack -c '${hush} workload x509 --trust-domain kelliher /tmp/svid'")

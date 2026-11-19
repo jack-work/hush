@@ -22,21 +22,28 @@ type Attestor func(conn net.Conn) (Peer, error)
 
 type Policy func(Peer) (spiffeid.ID, error)
 
-func UnitOf(cgroup string) (string, bool) {
+func UnitOf(cgroup string) (unit, dir string, ok bool) {
 	rest, ok := strings.CutPrefix(cgroup, "/system.slice/")
 	if !ok {
-		return "", false
+		return "", "", false
 	}
-	unit, _, _ := strings.Cut(rest, "/")
-	if strings.HasSuffix(unit, ".service") || strings.HasSuffix(unit, ".scope") {
-		return unit, true
+	dir = "/system.slice"
+	for part := range strings.SplitSeq(rest, "/") {
+		dir += "/" + part
+		if strings.HasSuffix(part, ".slice") {
+			continue
+		}
+		if strings.HasSuffix(part, ".service") || strings.HasSuffix(part, ".scope") {
+			return part, dir, true
+		}
+		return "", "", false
 	}
-	return "", false
+	return "", "", false
 }
 
 func NodePolicy(td, node string) Policy {
 	return func(p Peer) (spiffeid.ID, error) {
-		if unit, ok := UnitOf(p.Cgroup); ok && !p.Mixed {
+		if unit, _, ok := UnitOf(p.Cgroup); ok && !p.Mixed {
 			if id, err := spiffeid.New(td, append([]string{"node", node, "unit"}, unitSegments(unit)...)...); err == nil {
 				return id, nil
 			}

@@ -133,12 +133,14 @@ func TestTheRealAttestorNamesThisProcess(t *testing.T) {
 func TestThePolicyMapsCgroupsToIdentities(t *testing.T) {
 	p := workload.NodePolicy("kelliher", "spain")
 	for cg, want := range map[string]string{
-		"/system.slice/figaro.service":                                      "spiffe://kelliher/node/spain/unit/figaro.service",
-		"/system.slice/systemd-nspawn@shell0.service/payload":               "spiffe://kelliher/node/spain/unit/systemd-nspawn.service/shell0",
-		"/system.slice/figaro-valet@gluck.service":                          "spiffe://kelliher/node/spain/unit/figaro-valet.service/gluck",
-		"/system.slice/getty@tty\\x2d1.service":                             "spiffe://kelliher/node/spain/uid/1000",
-		"/user.slice/user-1000.slice/user@1000.service/app.slice/x.service": "spiffe://kelliher/node/spain/uid/1000",
-		"/system.slice/foo.mount":                                           "spiffe://kelliher/node/spain/uid/1000",
+		"/system.slice/figaro.service": "spiffe://kelliher/node/spain/unit/figaro.service",
+		"/system.slice/system-systemd\\x2dnspawn.slice/systemd-nspawn@shell0.service/payload": "spiffe://kelliher/node/spain/unit/systemd-nspawn.service/shell0",
+		"/system.slice/system-figaro\\x2dvalet.slice/figaro-valet@gluck.service":              "spiffe://kelliher/node/spain/unit/figaro-valet.service/gluck",
+		"/system.slice/system-getty.slice/getty@tty1.service":                                 "spiffe://kelliher/node/spain/unit/getty.service/tty1",
+		"/system.slice/system-x.slice/x.mount":                                                "spiffe://kelliher/node/spain/uid/1000",
+		"/system.slice/getty@tty\\x2d1.service":                                               "spiffe://kelliher/node/spain/uid/1000",
+		"/user.slice/user-1000.slice/user@1000.service/app.slice/x.service":                   "spiffe://kelliher/node/spain/uid/1000",
+		"/system.slice/foo.mount":                                                             "spiffe://kelliher/node/spain/uid/1000",
 	} {
 		id, err := p(workload.Peer{PID: 1, UID: 1000, Cgroup: cg})
 		if err != nil || id.String() != want {

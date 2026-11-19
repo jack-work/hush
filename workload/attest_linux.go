@@ -55,8 +55,8 @@ func PeerAttestor(conn net.Conn) (Peer, error) {
 		return Peer{}, err
 	}
 	mixed := false
-	if unit, ok := UnitOf(cg); ok {
-		mixed = !unitRunsAs(unit, cred.Uid)
+	if _, dir, ok := UnitOf(cg); ok {
+		mixed = !unitRunsAs(dir, cred.Uid)
 	}
 	if err := unix.PidfdSendSignal(pidfd, 0, nil, 0); err != nil && !errors.Is(err, unix.EPERM) {
 		return Peer{}, fmt.Errorf("%w: the peer exited while it was read: %v", ErrUnattested, err)
@@ -96,8 +96,8 @@ func cgroupOf(pid int) (string, error) {
 	return "", errors.Join(ErrUnattested, errors.New("no cgroup v2 path"))
 }
 
-func unitRunsAs(unit string, uid uint32) bool {
-	root := filepath.Join("/sys/fs/cgroup/system.slice", unit)
+func unitRunsAs(dir string, uid uint32) bool {
+	root := filepath.Join("/sys/fs/cgroup", dir)
 	ok := true
 	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {

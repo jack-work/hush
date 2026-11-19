@@ -15,7 +15,7 @@ import (
 // Machine is what the attestor read about a peer whose cgroup lies in a systemd-nspawn machine's unit
 // (/machine.slice/<template>@<instance>.service/...). The policy decides; the attestor only reads.
 type Machine struct {
-	Template   string   // the unit template, e.g. band-svc
+	Template   string   // the unit template, e.g. pool-svc
 	Instance   string   // the unit instance, e.g. spool-a-g1
 	Payload    bool     // the peer's cgroup is under <unit>/payload/ (never supervisor or .control)
 	Registered bool     // systemd-machined holds machine <instance> whose unit is <template>@<instance>.service

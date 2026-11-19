@@ -33,7 +33,7 @@ let
     exec ${pkgs.systemd}/bin/systemd-nspawn --quiet --keep-unit --register=$register --machine=$i \
       --private-users=$userns --private-users-ownership=off --directory=/var/lib/sbx/$i --as-pid2 \
       --bind-ro=/nix/store --bind-ro=/run/hush/workload.sock \
-      ${hush} workload jwt --trust-domain kelliher rou2
+      ${hush} workload jwt --trust-domain kelliher front
   '';
 in
 pkgs.testers.runNixOSTest {
@@ -101,7 +101,7 @@ pkgs.testers.runNixOSTest {
         assert "sandbox spool-a-g4: not registered with machined" in out, out
 
     with subtest("(vi) a host unit keeps its unit identity under node+machines"):
-        out = spain.succeed("systemd-run --wait --pipe -p DynamicUser=yes ${hush} workload jwt --trust-domain kelliher rou2")
+        out = spain.succeed("systemd-run --wait --pipe -p DynamicUser=yes ${hush} workload jwt --trust-domain kelliher front")
         token = [l for l in out.split() if l.startswith("ey")][-1].split(".")[1]
         sub = json.loads(base64.urlsafe_b64decode(token + "=" * (-len(token) % 4)))["sub"]
         assert sub.startswith("spiffe://kelliher/node/spain/unit/run-"), sub

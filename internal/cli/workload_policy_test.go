@@ -11,7 +11,7 @@ import (
 // RED if servePolicy accepts a policy and map that do not belong together.
 func TestServePolicyNeedsAMatchingMap(t *testing.T) {
 	good := filepath.Join(t.TempDir(), "machines.json")
-	if err := os.WriteFile(good, []byte(`{"template":"band-svc","base":1895825408,"size":65536,"machines":{"spool-a":{"id":"a","k":1}}}`), 0o600); err != nil {
+	if err := os.WriteFile(good, []byte(`{"template":"pool-svc","base":1895825408,"size":65536,"machines":{"spool-a":{"id":"a","k":1}}}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	cases := []struct {

@@ -57,7 +57,7 @@ in
       description = "The sandbox map for policy node+machines (hush docs/identity-contracts.md, sandbox identity).";
       type = types.nullOr (types.submodule {
         options = {
-          template = mkOption { type = types.strMatching "[A-Za-z0-9_.-]+"; description = "The machine unit template, e.g. band-svc."; };
+          template = mkOption { type = types.strMatching "[A-Za-z0-9_.-]+"; description = "The machine unit template, e.g. pool-svc."; };
           base = mkOption { type = types.ints.u32; description = "First host uid of range k=0."; };
           size = mkOption { type = types.ints.positive; description = "uids per range."; };
           machines = mkOption {

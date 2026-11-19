@@ -51,7 +51,7 @@ func (x tree) cg(dir string, pids ...int) {
 
 const (
 	base   = 1895890944 // range k=1, as measured
-	unitA  = "/machine.slice/band-svc@spool-a-g1.service"
+	unitA  = "/machine.slice/pool-svc@spool-a-g1.service"
 	leader = 100
 )
 
@@ -87,7 +87,7 @@ func registry(entries map[string][2]any) Registry {
 	}
 }
 
-var registered = registry(map[string][2]any{"spool-a-g1": {"band-svc@spool-a-g1.service", leader}})
+var registered = registry(map[string][2]any{"spool-a-g1": {"pool-svc@spool-a-g1.service", leader}})
 
 // RED if readMachine stops reading any fact the policy decides on.
 func TestReadMachineGathersTheFacts(t *testing.T) {
@@ -110,10 +110,10 @@ func TestReadMachineGathersTheFacts(t *testing.T) {
 		{"machined does not know the machine: nothing else is read", nil, registry(nil), "payload/init.scope",
 			Machine{Payload: true}},
 		{"machined names another unit for the name", nil,
-			registry(map[string][2]any{"spool-a-g1": {"band-svc@spool-a-g2.service", leader}}), "payload/init.scope",
+			registry(map[string][2]any{"spool-a-g1": {"pool-svc@spool-a-g2.service", leader}}), "payload/init.scope",
 			Machine{Payload: true}},
 		{"machined reports no leader", nil,
-			registry(map[string][2]any{"spool-a-g1": {"band-svc@spool-a-g1.service", 0}}), "payload/init.scope",
+			registry(map[string][2]any{"spool-a-g1": {"pool-svc@spool-a-g1.service", 0}}), "payload/init.scope",
 			Machine{Payload: true}},
 		{"a host-uid process in the payload is read as such", func(x tree) {
 			x.proc(104, 1000)
@@ -140,8 +140,8 @@ func TestReadMachineGathersTheFacts(t *testing.T) {
 		if c.edit != nil {
 			c.edit(x)
 		}
-		got := x.r.readMachine(c.reg, "band-svc", "spool-a-g1", c.rest)
-		c.want.Template, c.want.Instance = "band-svc", "spool-a-g1"
+		got := x.r.readMachine(c.reg, "pool-svc", "spool-a-g1", c.rest)
+		c.want.Template, c.want.Instance = "pool-svc", "spool-a-g1"
 		slices.Sort(got.UIDs)
 		slices.Sort(c.want.UIDs)
 		if got.Template != c.want.Template || got.Instance != c.want.Instance || got.Payload != c.want.Payload ||
@@ -154,7 +154,7 @@ func TestReadMachineGathersTheFacts(t *testing.T) {
 // The facts as read, through the policy: the real tree of a node gives A's identity to its box runner and refuses
 // the supervisor and a mixed payload. RED if either half of the attestor-to-policy chain drops a fact.
 func TestFactsThroughThePolicy(t *testing.T) {
-	s := Sandboxes{Template: "band-svc", Base: 0x71000000, Size: 65536, Machines: map[string]Slot{"spool-a": {ID: "a", K: 1}}}
+	s := Sandboxes{Template: "pool-svc", Base: 0x71000000, Size: 65536, Machines: map[string]Slot{"spool-a": {ID: "a", K: 1}}}
 	p := MachinePolicy("kelliher", "spain", s)
 	peer := func(x tree, uid uint32, rest string) Peer {
 		cg := unitA + "/" + rest
@@ -163,7 +163,7 @@ func TestFactsThroughThePolicy(t *testing.T) {
 	}
 	x := sandboxA(t)
 	if id, err := p(peer(x, base+1000, "payload/system.slice/figaro-box.service")); err != nil ||
-		id.String() != "spiffe://kelliher/node/spain/unit/band-svc.service/spool-a" {
+		id.String() != "spiffe://kelliher/node/spain/unit/pool-svc.service/spool-a" {
 		t.Errorf("box runner: %s %v", id, err)
 	}
 	if _, err := p(peer(x, 0, "supervisor")); err == nil || err.Error() != "unattested: sandbox spool-a-g1: not in the payload" {

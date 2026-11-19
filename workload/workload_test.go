@@ -217,6 +217,23 @@ func TestTheSocketRefuses(t *testing.T) {
 	}
 }
 
+func TestTheClientRefusesAnOlderBundle(t *testing.T) {
+	a := authority(t, "spain", time.Now())
+	a.Bundle.Sequence = 5
+	f := serve(t, fixed(unitPeer), workload.NodePolicy("kelliher", "spain"), a)
+	if _, err := f.client.Bundle(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	older := a
+	ob := *a.Bundle
+	ob.Sequence = 4
+	older.Bundle = &ob
+	f.srv.SetAuthority(older)
+	if _, err := f.client.Bundle(context.Background()); err == nil {
+		t.Fatal("took bundle 4 after 5")
+	}
+}
+
 func TestTheClientRefusesAnAnswerItCannotVerify(t *testing.T) {
 	now := time.Now()
 	f := serve(t, fixed(unitPeer), workload.NodePolicy("kelliher", "spain"), authority(t, "spain", now))

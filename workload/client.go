@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
 
 	"github.com/jack-work/hush/bundle"
@@ -40,6 +41,9 @@ func SocketPath() string {
 type Client struct {
 	TrustDomain string
 	http        *http.Client
+
+	mu   sync.Mutex
+	seen uint64
 }
 
 type Error struct {
@@ -100,7 +104,17 @@ func (c *Client) Bundle(ctx context.Context) (*bundle.Bundle, error) {
 	if err != nil {
 		return nil, err
 	}
-	return bundle.Parse(c.TrustDomain, raw)
+	b, err := bundle.Parse(c.TrustDomain, raw)
+	if err != nil {
+		return nil, err
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if b.Sequence < c.seen {
+		return nil, fmt.Errorf("hush workload: bundle sequence %d is older than %d", b.Sequence, c.seen)
+	}
+	c.seen = b.Sequence
+	return b, nil
 }
 
 type X509SVID struct {

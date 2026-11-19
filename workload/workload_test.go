@@ -216,7 +216,7 @@ func TestTheSocketRefuses(t *testing.T) {
 		"jwt unattested":         {unattested, workload.NodePolicy("kelliher", "spain"), good, "/v1/jwt-svid", `{"audience":["a"]}`, 403, "unattested"},
 		"jwt without a key":      {fixed(unitPeer), workload.NodePolicy("kelliher", "spain"), workload.Authority{}, "/v1/jwt-svid", `{"audience":["a"]}`, 503, "unavailable"},
 		"cred not configured":    {fixed(unitPeer), workload.NodePolicy("kelliher", "spain"), good, "/cred/nope", "", 404, "not_found"},
-		"cred audience not its":  {fixed(unitPeer), workload.NodePolicy("kelliher", "spain"), good, "/cred/svid-front?audience=rou2", "", 400, "bad_request"},
+		"cred audience not its":  {fixed(unitPeer), workload.NodePolicy("kelliher", "spain"), good, "/cred/svid-front?audience=other", "", 400, "bad_request"},
 		"cred unattested":        {unattested, workload.NodePolicy("kelliher", "spain"), good, "/cred/svid-front", "", 403, "unattested"},
 		"cred without a key":     {fixed(unitPeer), workload.NodePolicy("kelliher", "spain"), workload.Authority{}, "/cred/svid-front", "", 503, "unavailable"},
 		"oversized body":         {fixed(unitPeer), workload.NodePolicy("kelliher", "spain"), good, "/v1/jwt-svid", `{"audience":["` + strings.Repeat("a", 20<<10) + `"]}`, 400, "bad_request"},

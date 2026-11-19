@@ -70,7 +70,7 @@ pkgs.testers.runNixOSTest {
     with subtest("(ii-b) GET /cred/<name> answers the CALLER's own JWT-SVID: jack's uid, never another's"):
         sub = spain.succeed("su - jack -c 'curl -sf --unix-socket /run/hush/workload.sock http://hush/cred/svid-front' | jq -r '.token | split(\".\")[1] | gsub(\"-\";\"+\") | gsub(\"_\";\"/\") | . + (\"=\" * ((4 - length % 4) % 4)) | @base64d | fromjson | .sub'")
         assert sub.strip() == "spiffe://kelliher/node/spain/uid/1000", sub
-        spain.succeed("test \"$(su - jack -c 'curl -s -o /dev/null -w %{http_code} --unix-socket /run/hush/workload.sock http://hush/cred/svid-front?audience=rou2')\" = 400")
+        spain.succeed("test \"$(su - jack -c 'curl -s -o /dev/null -w %{http_code} --unix-socket /run/hush/workload.sock http://hush/cred/svid-front?audience=other')\" = 400")
 
     with subtest("(iii) the issuer runs with no network, no capabilities, its own uid"):
         pid = spain.succeed("systemctl show -p MainPID --value hush-workload").strip()

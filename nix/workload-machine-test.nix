@@ -28,7 +28,7 @@ let
       spool-a-g3) userns=${toString (base + 3 * size)}:${toString size} ;;
       spool-a-g4) register=no ;;
     esac
-    mkdir -p /var/lib/sbx/$i/etc /var/lib/sbx/$i/run/hush /var/lib/sbx/$i/nix/store
+    mkdir -p /var/lib/sbx/$i/etc /var/lib/sbx/$i/usr /var/lib/sbx/$i/run/hush /var/lib/sbx/$i/nix/store
     echo ID=sbx > /var/lib/sbx/$i/etc/os-release
     exec ${pkgs.systemd}/bin/systemd-nspawn --quiet --keep-unit --register=$register --machine=$i \
       --private-users=$userns --private-users-ownership=off --directory=/var/lib/sbx/$i --as-pid2 \

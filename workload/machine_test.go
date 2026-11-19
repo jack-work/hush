@@ -193,6 +193,7 @@ func TestLoadSandboxesRefusesMapsThatCannotAttest(t *testing.T) {
 		{"a template with @", `{"template":"band@svc","base":0,"size":1,"machines":{}}`, `sandboxes: template "band@svc"`},
 		{"size 0", `{"template":"t","base":0,"size":0,"machines":{}}`, "sandboxes: size 0"},
 		{"a name that ends in a generation", `{"template":"t","base":0,"size":1,"machines":{"spool-a-g1":{"id":"a","k":0}}}`, `sandboxes: machine name "spool-a-g1"`},
+		{"an empty machine name", `{"template":"t","base":0,"size":1,"machines":{"":{"id":"x","k":0}}}`, `sandboxes: machine name ""`},
 		{"two machines in one k", `{"template":"t","base":0,"size":1,"machines":{"a":{"id":"a","k":2},"b":{"id":"b","k":2}}}`, "share k=2"},
 		{"a range past 2^32", `{"template":"t","base":4294901760,"size":65536,"machines":{"a":{"id":"a","k":1}}}`, "sandboxes: a: range k=1 overflows"},
 		{"not json", `nope`, "invalid character"},

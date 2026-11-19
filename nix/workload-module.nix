@@ -74,6 +74,10 @@ in
         assertion = cfg.creds == { } || cfg.jwtKey != null;
         message = "services.hush-workload.creds answer JWT-SVIDs: set jwtKey";
       }
+      {
+        assertion = lib.all (n: builtins.match "[A-Za-z0-9][A-Za-z0-9._-]*" n != null) (lib.attrNames cfg.creds);
+        message = "services.hush-workload.creds names are one URL path segment ([A-Za-z0-9][A-Za-z0-9._-]*)";
+      }
     ];
 
     systemd.sockets.hush-workload = {

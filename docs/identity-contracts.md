@@ -16,9 +16,12 @@ A SPIFFE ID is `spiffe://<trust domain>/<path>`.
 | identity | path | issued to |
 |---|---|---|
 | node | `/node/<node>` | a machine, its hush and its figaro node door |
-| unit | `/node/<node>/unit/<systemd unit>` | a process attested to that unit on that node |
+| unit | `/node/<node>/unit/<systemd unit>` | a process attested to a system unit on that node |
+| instance | `/node/<node>/unit/<template>.<type>/<instance>` | a process in an instanced unit (`figaro-valet@gluck.service` is `/unit/figaro-valet.service/gluck`); an instance that is not a plain segment falls back to the uid identity |
 | uid | `/node/<node>/uid/<uid>` | a process attested only by its uid |
 | figaro | `/node/<node>/figaro/<aria id>` | a figaro, when the node's figaro vouches for it |
+
+A unit identity goes only to a caller whose uid is the only uid running in that unit's cgroup tree; a user that `su`s inside a root unit, or any process in a unit that mixes uids, gets its uid identity instead.
 
 Every workload identity sits under the node that issued it. A node's intermediate signs only its own subtree; a verifier refuses an SVID whose path is outside `/node/<issuer's node>/`.
 

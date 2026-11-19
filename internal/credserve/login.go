@@ -34,6 +34,8 @@ type Login struct {
 	ReadCode func(prompt string) (string, error)
 	Out      io.Writer
 	Listen   func(string, string) (net.Listener, error)
+
+	pollEvery time.Duration // the login gate's relay poll (default 1s)
 }
 
 func (l *Login) Run(ctx context.Context) (result error) {
@@ -46,6 +48,13 @@ func (l *Login) Run(ctx context.Context) (result error) {
 	}
 	if err := l.checkExisting(); err != nil {
 		return err
+	}
+	if l.Config.LoginGate != nil {
+		user, err := l.gate(ctx)
+		if err != nil {
+			return err
+		}
+		fmt.Fprintf(l.Out, "%s signed in (%s); now the %s login\n", user, l.Config.LoginGate.Group, l.Name)
 	}
 
 	var tok oauth.Tokens

@@ -67,6 +67,9 @@ type Config struct {
 	// a live row grants that credential to that principal beside the
 	// config's own grants. Empty: no consent grants.
 	ConsentGrants string `toml:"consent_grants"`
+	// LoginGate, when set, gates `hush cred login` on an administrator's
+	// sign-in at an OpenID provider (see LoginGate).
+	LoginGate *LoginGate `toml:"login_gate"`
 
 	recipient age.Recipient
 }
@@ -126,6 +129,11 @@ func ParseConfig(data []byte) (*Config, error) {
 	}
 	if c.Systemd != nil {
 		if err := c.Systemd.validate(c.Instances); err != nil {
+			return nil, err
+		}
+	}
+	if c.LoginGate != nil {
+		if err := c.LoginGate.validate(); err != nil {
 			return nil, err
 		}
 	}
@@ -276,6 +284,13 @@ func (c *Config) EgressHosts() []string {
 				continue
 			}
 			seen[hostPort(u)] = true
+		}
+	}
+	if c.LoginGate != nil {
+		for _, raw := range c.LoginGate.egressURLs() {
+			if u, err := url.Parse(raw); err == nil {
+				seen[hostPort(u)] = true
+			}
 		}
 	}
 	out := make([]string, 0, len(seen))

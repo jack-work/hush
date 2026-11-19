@@ -107,7 +107,7 @@ func gateRig(t *testing.T, p *idp) (*Login, *syncBuffer, func() (string, bool)) 
 }
 
 func TestLoginGate(t *testing.T) {
-	member := []string{"idm_all_persons@idm.band.internal", "hush-admin@idm.band.internal"}
+	member := []string{"idm_all_persons@idm.example", "hush-admin@idm.example"}
 	cases := []struct {
 		name string
 		idp  idp
@@ -116,7 +116,7 @@ func TestLoginGate(t *testing.T) {
 		{"member signs in", idp{groups: member}, ""},
 		{"short group name", idp{groups: []string{"hush-admin"}}, ""},
 		{"relay restarts, sign-in survives", idp{groups: member, relay: []int{503, 404, 429}}, ""},
-		{"not in the group", idp{groups: []string{"hush-admins@idm.band.internal"}}, "jack is not in hush-admin"},
+		{"not in the group", idp{groups: []string{"hush-admins@idm.example"}}, "jack is not in hush-admin"},
 		{"token refused by userinfo", idp{groups: member, userinfo: 401}, "userinfo 401"},
 		{"stale sign-in", idp{groups: member, claims: map[string]any{"auth_time": time.Now().Add(-time.Hour).Unix()}}, "not fresh"},
 		{"no auth_time", idp{groups: member, claims: map[string]any{"auth_time": 0}}, "not fresh"},

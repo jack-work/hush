@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net"
@@ -204,22 +205,24 @@ func TestTheSocketRefuses(t *testing.T) {
 		status int
 		code   string
 	}{
-		"unattested peer":        {unattested, workload.NodePolicy("kelliher", "spain"), good, "/v1/x509-svid", string(goodJSON), 403, "unattested"},
-		"policy refuses":         {fixed(unitPeer), refuse, good, "/v1/x509-svid", string(goodJSON), 403, "unattested"},
-		"another node's subtree": {fixed(unitPeer), merlin, good, "/v1/x509-svid", string(goodJSON), 403, "not_granted"},
-		"no csr":                 {fixed(unitPeer), workload.NodePolicy("kelliher", "spain"), good, "/v1/x509-svid", `{}`, 400, "bad_request"},
-		"csr not signed by key":  {fixed(unitPeer), workload.NodePolicy("kelliher", "spain"), good, "/v1/x509-svid", string(brokenJSON), 400, "bad_request"},
-		"not json":               {fixed(unitPeer), workload.NodePolicy("kelliher", "spain"), good, "/v1/x509-svid", `nope`, 400, "bad_request"},
-		"expired intermediate":   {fixed(unitPeer), workload.NodePolicy("kelliher", "spain"), expired, "/v1/x509-svid", string(goodJSON), 503, "unavailable"},
-		"no intermediate":        {fixed(unitPeer), workload.NodePolicy("kelliher", "spain"), workload.Authority{}, "/v1/x509-svid", string(goodJSON), 503, "unavailable"},
-		"jwt without audience":   {fixed(unitPeer), workload.NodePolicy("kelliher", "spain"), good, "/v1/jwt-svid", `{"audience":[]}`, 400, "bad_request"},
-		"jwt unattested":         {unattested, workload.NodePolicy("kelliher", "spain"), good, "/v1/jwt-svid", `{"audience":["a"]}`, 403, "unattested"},
-		"jwt without a key":      {fixed(unitPeer), workload.NodePolicy("kelliher", "spain"), workload.Authority{}, "/v1/jwt-svid", `{"audience":["a"]}`, 503, "unavailable"},
-		"cred not configured":    {fixed(unitPeer), workload.NodePolicy("kelliher", "spain"), good, "/cred/nope", "", 404, "not_found"},
-		"cred audience not its":  {fixed(unitPeer), workload.NodePolicy("kelliher", "spain"), good, "/cred/svid-front?audience=other", "", 400, "bad_request"},
-		"cred unattested":        {unattested, workload.NodePolicy("kelliher", "spain"), good, "/cred/svid-front", "", 403, "unattested"},
-		"cred without a key":     {fixed(unitPeer), workload.NodePolicy("kelliher", "spain"), workload.Authority{}, "/cred/svid-front", "", 503, "unavailable"},
-		"oversized body":         {fixed(unitPeer), workload.NodePolicy("kelliher", "spain"), good, "/v1/jwt-svid", `{"audience":["` + strings.Repeat("a", 20<<10) + `"]}`, 400, "bad_request"},
+		"unattested peer":           {unattested, workload.NodePolicy("kelliher", "spain"), good, "/v1/x509-svid", string(goodJSON), 403, "unattested"},
+		"policy refuses":            {fixed(unitPeer), refuse, good, "/v1/x509-svid", string(goodJSON), 403, "unattested"},
+		"another node's subtree":    {fixed(unitPeer), merlin, good, "/v1/x509-svid", string(goodJSON), 403, "not_granted"},
+		"no csr":                    {fixed(unitPeer), workload.NodePolicy("kelliher", "spain"), good, "/v1/x509-svid", `{}`, 400, "bad_request"},
+		"csr not signed by key":     {fixed(unitPeer), workload.NodePolicy("kelliher", "spain"), good, "/v1/x509-svid", string(brokenJSON), 400, "bad_request"},
+		"not json":                  {fixed(unitPeer), workload.NodePolicy("kelliher", "spain"), good, "/v1/x509-svid", `nope`, 400, "bad_request"},
+		"expired intermediate":      {fixed(unitPeer), workload.NodePolicy("kelliher", "spain"), expired, "/v1/x509-svid", string(goodJSON), 503, "unavailable"},
+		"no intermediate":           {fixed(unitPeer), workload.NodePolicy("kelliher", "spain"), workload.Authority{}, "/v1/x509-svid", string(goodJSON), 503, "unavailable"},
+		"jwt without audience":      {fixed(unitPeer), workload.NodePolicy("kelliher", "spain"), good, "/v1/jwt-svid", `{"audience":[]}`, 400, "bad_request"},
+		"jwt unattested":            {unattested, workload.NodePolicy("kelliher", "spain"), good, "/v1/jwt-svid", `{"audience":["a"]}`, 403, "unattested"},
+		"jwt without a key":         {fixed(unitPeer), workload.NodePolicy("kelliher", "spain"), workload.Authority{}, "/v1/jwt-svid", `{"audience":["a"]}`, 503, "unavailable"},
+		"cred not configured":       {fixed(unitPeer), workload.NodePolicy("kelliher", "spain"), good, "/cred/nope", "", 404, "not_found"},
+		"cred audience not its":     {fixed(unitPeer), workload.NodePolicy("kelliher", "spain"), good, "/cred/svid-front?audience=other", "", 400, "bad_request"},
+		"cred empty audience asked": {fixed(unitPeer), workload.NodePolicy("kelliher", "spain"), good, "/cred/svid-front?audience=", "", 400, "bad_request"},
+		"cred one audience not its": {fixed(unitPeer), workload.NodePolicy("kelliher", "spain"), good, "/cred/svid-front?audience=front&audience=other", "", 400, "bad_request"},
+		"cred unattested":           {unattested, workload.NodePolicy("kelliher", "spain"), good, "/cred/svid-front", "", 403, "unattested"},
+		"cred without a key":        {fixed(unitPeer), workload.NodePolicy("kelliher", "spain"), workload.Authority{}, "/cred/svid-front", "", 503, "unavailable"},
+		"oversized body":            {fixed(unitPeer), workload.NodePolicy("kelliher", "spain"), good, "/v1/jwt-svid", `{"audience":["` + strings.Repeat("a", 20<<10) + `"]}`, 400, "bad_request"},
 	}
 	for name, c := range cases {
 		f := serve(t, c.attest, c.policy, c.auth)
@@ -301,20 +304,37 @@ func TestACredFetchAnswersTheCallersOwnSVID(t *testing.T) {
 }
 
 func TestParseCreds(t *testing.T) {
-	for raw, want := range map[string]string{
-		"svid-front=front":         "",
-		"svid-front=front,canary":  "",
-		"svid-front":               "want name=aud",
-		"=front":                   "want name=aud",
-		"svid-front=":              "want name=aud",
-		"svid-front=front,,canary": "want name=aud",
-	} {
-		_, err := workload.ParseCreds([]string{raw})
-		if (want == "") != (err == nil) || (err != nil && !strings.Contains(err.Error(), want)) {
-			t.Errorf("%q: %v, want %q", raw, err, want)
-		}
+	cases := []struct {
+		name string
+		raw  []string
+		want map[string][]string // nil: refused with err
+		err  string
+	}{
+		{"one audience", []string{"svid-front=front"}, map[string][]string{"svid-front": {"front"}}, ""},
+		{"two audiences", []string{"svid-front=front,canary"}, map[string][]string{"svid-front": {"front", "canary"}}, ""},
+		{"two names", []string{"a=x", "b=y"}, map[string][]string{"a": {"x"}, "b": {"y"}}, ""},
+		{"an = inside the audience is text", []string{"a=b=c"}, map[string][]string{"a": {"b=c"}}, ""},
+		{"a unicode audience", []string{"a=caf\u00e9"}, map[string][]string{"a": {"caf\u00e9"}}, ""},
+		{"no =", []string{"svid-front"}, nil, `cred "svid-front": want name=aud[,aud]`},
+		{"no name", []string{"=front"}, nil, `cred "=front": want name=aud[,aud]`},
+		{"no audience", []string{"svid-front="}, nil, `cred "svid-front=": want name=aud[,aud]`},
+		{"an empty audience between commas", []string{"a=x,,y"}, nil, `cred "a=x,,y": want name=aud[,aud]`},
+		{"a whitespace audience", []string{"a= "}, nil, `cred "a= ": want name=aud[,aud]`},
+		{"a name with a slash (not one path segment)", []string{"a/b=x"}, nil, `cred "a/b=x": want name=aud[,aud]`},
+		{"a name with a space", []string{"a b=x"}, nil, `cred "a b=x": want name=aud[,aud]`},
+		{"a unicode name", []string{"caf\u00e9=x"}, nil, `cred "caf\u00e9=x": want name=aud[,aud]`},
+		{"a name given twice", []string{"a=x", "a=y"}, nil, "cred a given twice"},
 	}
-	if _, err := workload.ParseCreds([]string{"a=x", "a=y"}); err == nil || !strings.Contains(err.Error(), "twice") {
-		t.Errorf("a duplicate name: %v", err)
+	for _, c := range cases {
+		got, err := workload.ParseCreds(c.raw)
+		if c.err != "" {
+			if err == nil || err.Error() != c.err {
+				t.Errorf("%s: got %v, want %q", c.name, err, c.err)
+			}
+			continue
+		}
+		if err != nil || fmt.Sprint(got) != fmt.Sprint(c.want) {
+			t.Errorf("%s: got %v %v, want %v", c.name, got, err, c.want)
+		}
 	}
 }

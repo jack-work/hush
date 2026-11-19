@@ -12,10 +12,12 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"regexp"
 	"slices"
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 
 	"github.com/jack-work/hush/bundle"
 	"github.com/jack-work/hush/ca"
@@ -223,13 +225,17 @@ func (s *Server) issueJWT(w http.ResponseWriter, id spiffeid.ID, audience []stri
 	return tok, exp, true
 }
 
+// credNameRE is one URL path segment; an audience is any text without spaces
+// or commas.
+var credNameRE = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
+
 // ParseCreds reads name=aud[,aud] rows for Server.Creds.
 func ParseCreds(raw []string) (map[string][]string, error) {
 	rows := map[string][]string{}
 	for _, r := range raw {
 		name, auds, ok := strings.Cut(r, "=")
 		list := strings.Split(auds, ",")
-		if !ok || name == "" || slices.Contains(list, "") {
+		if !ok || !credNameRE.MatchString(name) || slices.ContainsFunc(list, func(a string) bool { return a == "" || strings.ContainsFunc(a, unicode.IsSpace) }) {
 			return nil, fmt.Errorf("cred %q: want name=aud[,aud]", r)
 		}
 		if _, dup := rows[name]; dup {

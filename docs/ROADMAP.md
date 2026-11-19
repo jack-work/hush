@@ -1,23 +1,26 @@
 # hush roadmap
 
-hush is one small Go binary that keeps a machine's credentials, signs its users in, and serves short-lived tokens to the processes allowed to have them. Two plans now drive it. This file merges them into one list, so that each item has one owner and one issue.
+hush is one small Go binary that keeps a machine's credentials, signs its users in, issues workload identities, and serves short-lived tokens to the processes allowed to have them. Two plans drive it, and this file merges them into one list, so that each item has one owner and one issue.
 
-- **sandbox-identity**: hush as the workload-identity agent for a pool of sandboxes (SPIFFE/SPIRE-style). Every sandbox gets one short-lived identity, and a gateway on its node trades that identity for real tokens under timed grants.
-- **deployment-modes**: hush as a system service on each machine, a drop box for sign-ins and secrets, and federation between machines (figaro's `docs/proposals/deployment-modes`).
+- **sandbox-identity**: hush as the identity and credential service behind a pool of sandboxes. Each sandbox holds one short-lived identity and never a real token; one outbound gateway turns that identity into real credentials.
+- **deployment-modes**: hush as a system service on each machine, the troupe CA, a drop box for sign-ins and secrets, and federation between machines (figaro's `docs/proposals/deployment-modes`).
 
-Every item below has a claim issue, labelled with the plan it comes from (`system:sandbox-identity`, `system:deployment-modes`, or both where the two plans asked for the same thing). Claim an item on its issue before starting it. Work on hush is paused until this file lands.
+Every item has a claim issue, labelled with the plan it comes from (`system:sandbox-identity`, `system:deployment-modes`, or both). Claim an item on its issue before starting it.
 
 ## Where hush is today
 
-Shipped and merged on this repository:
+- v0.15 to v0.17: the system minter, principals, the `exec` kind, `/status`, Copilot remote sign-in, the Anthropic Max sign-in, `services.hush` as a system service, the drop box, the admin socket.
+- #8: the README. #11 and #14: one consent check (`authorizeCred`) for every gated credential route. #12: tests for owner `POST /refresh`. #13: a systemd `LoadCredential` socket. #10: stale episodes on `/status`.
+- v0.18.0 (#34): hush is the troupe CA and a SPIFFE-style workload agent: frozen contracts in [identity-contracts.md](identity-contracts.md), the CA core (root, per-machine intermediates, X.509-SVIDs, JWT-SVIDs, OpenSSH user certificates), the trust bundle, and the workload socket with pidfd + cgroup + uid attestation.
 
-- v0.15 to v0.17: the system minter, principals, the `exec` kind, `/status`, Copilot remote sign-in, the Anthropic Max sign-in, `oauth --timeout`, `services.hush` as a system service, the drop box (`drop.sock`: sign-in plus `POST /refresh`), the admin socket.
-- #8: the README, rewritten to say what hush is now.
-- #11: one consent check (`authorizeCred`) for every gated credential route, with grants read on each use.
-- #12: tests for the owner `POST /refresh` route.
-- #13: a systemd `LoadCredential` socket, so a granted unit gets its token as a systemd credential.
+## Architecture
 
-In review: #10 (stale episodes on `/status`) and #14 (the systemd socket goes through the consent check).
+- **Identity.** Workload identities are hush's own SVIDs under the troupe CA, as [identity-contracts.md](identity-contracts.md) defines. A sandbox gets its identity from the workload socket of its machine's hush.
+- **External CA.** [step-ca](https://smallstep.com/docs/step-ca/) signs only SSH host certificates and web, service and box TLS. It does not sign workload identities.
+- **One outbound gateway.** A single gateway carries every outbound call from a sandbox. Per request it verifies the caller's JWT-SVID, checks the caller's group membership in [Kanidm](https://kanidm.com/), and asks hush for the real secret. hush builds no gateway of its own.
+- **Grants.** Kanidm group membership says who may use a service; hush holds the time limit of each grant, since Kanidm has no timed membership. Both must allow.
+- **Secrets.** The root hush keeps refresh tokens. Read-only replicas on the gateway machines hold only the access tokens that gateway may use.
+- **The admin's store CLI.** The admin stores a credential with one command, authenticated by a Kanidm passkey.
 
 ## Design rules
 
@@ -26,7 +29,7 @@ In review: #10 (stale episodes on `/status`) and #14 (the systemd socket goes th
 - A negative test for every refusal.
 - Tests run in the repository's nix devShell before a merge is asked for.
 - Tokens never enter a sandbox. A sandbox holds only its own short-lived identity.
-- Fleet certificates (SSH, web and service, sandbox identities) are signed by an external CA ([step-ca](https://smallstep.com/docs/step-ca/)); hush is its client. The one exception is figaro federation, which keeps its own CA (the troupe CA), moving into hush.
+- The contracts in identity-contracts.md are frozen: a change is a new version path, not an edit.
 
 ## Items
 
@@ -34,36 +37,36 @@ In review: #10 (stale episodes on `/status`) and #14 (the systemd socket goes th
 
 | item | what | proof | plan | status |
 |---|---|---|---|---|
-| Stale episodes (#15) | A credential that needs a new sign-in shows as stale on `/status`, from its first stale answer; the episode survives restarts and ends on confirmed recovery. An alert fires once per episode. | restart before first fetch keeps the episode; stale, success, stale gives two episodes | sandbox-identity | #10, fixing review findings |
-| Systemd socket consent (#16) | The systemd credential socket grants through `authorizeCred` (consent to `systemd:<unit>`); oversized grants file refused. | ungranted unit refused; oversize refused | sandbox-identity | #14, in review |
-| Templates and families (#17) | `?template=` and credential families; a node-to-node path for families served by another machine. | conformance per row against the previous minter | sandbox-identity | not started |
+| Templates and families (#17) | `?template=` and credential families; a machine-to-machine path for families served elsewhere. | conformance per row against the previous minter | sandbox-identity | not started |
 | Sign-in deadline (#18) | A deadline for browser (SPA) sign-ins, then `503 credential_stale`; an auth-code login. | deadline gives 503; login completes | sandbox-identity | not started |
-| `hush login` client (#19) | One client for sign-ins: talks to the drop box, and runs an `exec` row's declared login (for example `az`, `gh`). | exit 3 prints the hint; the login runs once | both | not started |
-| `PUT /secret` (#20) | Push a static secret into the drop box (write-only). | written secret is served to its principal; nobody can read it back through the drop box | deployment-modes | designed |
-| Audit (#21) | One JSON line per fetch, attest, issue, grant decision and login (identity, machine, grant, row, outcome; never a token or key), to the journal. | redaction test | sandbox-identity | not started |
-| Unlock without typing (#22) | The machine's hush starts after a reboot with no passphrase: its identity is sealed with `LoadCredentialEncrypted` (systemd's host key). | restart serves with no prompt; the sealed file copied elsewhere fails | sandbox-identity | not started |
+| Store CLI (#19) | `hush cred login <n>`: the admin authenticates to Kanidm with a passkey (PKCE, public client), the root hush checks the admin group, the credential's own login runs (device code, browser, or an `exec` row's login), and the result is stored in the root hush. Covers the drop-box login client. | refused: no Kanidm token, a token without the admin group, an expired token, a store sent to a replica | both | not started |
+| `PUT /secret` (#20) | Push a static secret into the drop box (write-only). | written secret served to its principal; never readable back through the drop box | deployment-modes | designed |
+| Audit (#21) | One JSON line per fetch, issue, grant decision and login (identity, machine, grant, row, outcome; never a token or key), to the journal. | redaction test | sandbox-identity | not started |
+| Unlock without typing (#22) | The machine's hush starts after a reboot with no passphrase: its keys are sealed with `LoadCredentialEncrypted` (systemd's host key). | restart serves with no prompt; the sealed file copied elsewhere fails | sandbox-identity | not started |
 | Retire `services.hush-cred` (#23) | Remove the one-release alias once every consumer uses `services.hush`. | evaluation fails on the old name with a pointer to the new one | deployment-modes | waits on consumers |
 | Docs nit (#24) | The deferred review note in `docs/hush-system-service.md`. | doc reads true | deployment-modes | open |
 
-### Workload identity
+### Identity and the gateway
 
 | item | what | proof | plan | status |
 |---|---|---|---|---|
-| Workload attestor (#25) | On a sandbox's workload socket, hush takes the peer as a pidfd (`SO_PEERPIDFD`, never a bare pid), reads its cgroup, maps it to the sandbox's systemd/nspawn unit and then to its identity, and requires the peer's uid to agree. An aria-level claim needs a second fact from figaro's box door. It then issues an X.509 SVID (10 minutes, renewed at 2/3) through the external CA. Interface: `POST /v1/attest` on a unix socket, `200 {spiffe_id, identity, unit, uid, expires_at}` or `403 {error: unattested, reason}`; clients fail closed. | refused: bare pid, exited pid, wrong cgroup, uid/unit disagree, unknown unit, retired identity, pid reuse, aria not in that sandbox, CSR SAN not the attested id; two sandboxes get distinct ids | both (the deployment-modes "local identity" is the same design) | not started |
-| Gateway attest path (#26) | The node gateway passes its caller's pidfd to hush over a unix socket (HTTP over the socket); hush runs the same attestor. `HTTPS_PROXY` just works from inside a sandbox. | unattested peer, another sandbox's pidfd, endpoint/identity mismatch refused | sandbox-identity | not started |
-| Timed grants and exchange (#27) | A grant is `{subject (SPIFFE id or prefix), dest host[:port], methods, path prefix, credential row, not_before, expires, approved_by}`, checked through `authorizeCred`. `POST /v1/exchange` returns the real token to the gateway, never to the sandbox. Admin revoke: a revoked grant stops the next exchange. | refused: no grant, expired, not yet valid, dest/method/path outside, another identity's grant, revoked | both (deployment-modes admin revoke folded in) | not started |
-| Federation (#28) | figaro federation: an upstream hush serves the machines' hushes over mTLS signed by the troupe CA, which moves into hush (`services.hush.upstream` on a machine, `serveNodes` upstream; troupe root on offline media). It does not wait on, or block, the sandbox-identity gateway, which uses the external CA. Goal: merge the two into one system later. | another machine's cert, a subject from another machine, an expired cert refused; upstream down gives 502 and no cached secret | deployment-modes | not started; claimed by deployment-modes |
-| Gateway with no secrets (#33) | A sandbox node's gateway holds no secrets of its own: it calls `POST /v1/exchange` on an upstream hush over mTLS with its machine identity from the external CA. The machine in the subject must equal the gateway's machine. Separate from figaro federation (#28). | another machine's cert, a subject from another machine, an expired cert refused; upstream down gives 502 and no cached secret | sandbox-identity | not started |
-| SSH user certificates (#29) | hush issues an attested workload a 10-minute OpenSSH user certificate from the external CA; the git server trusts that CA, with a short principal per identity. | expired cert, other CA, principal not granted, static key after migration refused | sandbox-identity | not started |
+| Workload agent (#25) | The workload socket, attestation and SVID issue of identity-contracts.md. | the contracts' tests, go-spiffe interop | both | shipped in v0.18.0 |
+| Local forwarder (#33) | On every sandbox machine, `HTTPS_PROXY` points at a forwarder with no secrets: it takes the caller's JWT-SVID (audience: the gateway) from the workload socket and forwards over mTLS with its machine identity to the gateway, which accepts a subject only from that subject's own machine. | refused: an unattested peer, another sandbox's identity, a subject from another machine | sandbox-identity | not started |
+| Grant time limits (#27) | `authorizeCred` becomes one check: the caller's identity token verified (chain, expiry, machine) plus the time limit of the (service, caller) grant held in hush. Admin revoke ends a time limit at once. The file-based consent of #11 and #14 is removed in the same change. | refused: no token, bad chain, expired token, another machine's subject, time limit passed or not yet started, revoked | both | not started; both plans list it, agree the claim on the issue |
+| Serve the gateway (#35) | The gateway is one principal on hush's socket. Per call, (service, caller token): hush verifies the token, checks the time limit, and returns the real secret from the local replica or the root. Contract: `200` token + `expires_at`, `401 unattested`, `403 not_granted`, `503 credential_stale`, `502 transient`. | refused: any other principal, an invalid or expired caller token, a passed time limit, a service not in this replica | sandbox-identity | not started |
+| Replicas (#36) | The root hush pushes each gateway machine the access tokens it may use, encrypted to that machine's key; read-only; re-pushed on refresh; a revoke removes the row at the next push. Refresh tokens stay on the root. | a machine gets only its rows; another machine's key cannot decrypt; a write to a replica is refused | sandbox-identity | not started |
+| Federation (#28) | figaro federation: an upstream hush serves the machines' hushes over mTLS under the troupe CA (`services.hush.upstream`, `serveNodes`; troupe root on offline media). | another machine's cert, an expired cert, a subject from another machine refused | deployment-modes | not started |
+| SSH user certificates (#29) | The git server trusts hush's OpenSSH user certificates (identity-contracts.md section 2), with a short principal per identity. | expired cert, other CA, principal not granted, static key after migration refused | sandbox-identity | not started |
 | Per-aria identity (#30) | An aria's identity becomes unforgeable inside a shared sandbox once each aria runs under its own uid. | aria A's uid cannot get aria B's SVID | sandbox-identity | waits on figaro |
 
 ### Out of hush
 
-- The SSH host CA moves to the external CA (draft #9 will close; its negative tests become that CA's acceptance tests).
-- Static machine secrets stay with sops-nix.
+- SSH host certificates and web, service and box TLS: step-ca. Draft #9 (an SSH host CA in hush) closes; its negative tests become step-ca acceptance tests.
+- Static machine secrets: sops-nix.
+- Model routing (providers, failover, quotas): the gateway's own concern. hush serves it credentials, `/status` and forced refresh.
 
 ## Decisions and open questions
 
-**(a) Federation CA: DECIDED.** figaro federation keeps its separate CA (the troupe CA, moving into hush, iterated by deployment-modes). The external CA stays the CA for SSH, web and service certificates, box CAs and sandbox identities. Neither blocks the other; the goal is to merge federation and the fleet system into one later.
+**(a) CA split: DECIDED.** Workload identities are hush's SVIDs under the troupe CA (identity-contracts.md), which also signs figaro federation. step-ca signs SSH host certificates and web, service and box TLS. Neither blocks the other; the goal is to merge them into one system later.
 
-**(b) Canonical repository.** #8 and #11 to #13 merged here on GitHub. A second, self-hosted copy of hush is still at v0.17.0 (2bdde24). Decide which one is canonical and mirror the other from it.
+**(b) Canonical repository: OPEN.** #8, #10 to #14 and v0.18.0 landed here on GitHub. A second, self-hosted copy of hush is still at v0.17.0 (2bdde24). Decide which one is canonical and mirror the other from it.

@@ -9,8 +9,10 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -89,9 +91,18 @@ func runOverlay(t *testing.T, args ...string) (string, error) {
 
 var overlayT0 = time.Date(2026, 11, 19, 12, 0, 0, 0, time.UTC)
 
-// A gate whose provider cannot be reached: a write must fail at sign-in,
-// before anything reaches the socket; a read needs no sign-in.
-const deadGate = "\n[login_gate]\nissuer = \"https://127.0.0.1:1/idp\"\nclient_id = \"hush-cli\"\ngroup = \"hush-admin\"\nredirect_uri = \"https://127.0.0.1:1/cb\"\nrelay = \"https://127.0.0.1:1/code\"\n"
+// untrustedGate is a [login_gate] whose provider answers over TLS the CLI does
+// not trust: a write must fail at sign-in, at once and the same way every time,
+// before anything reaches the socket; a read needs no sign-in. ISSUER in a
+// case's error is this provider's issuer URL.
+func untrustedGate(t *testing.T) (gate, issuer string) {
+	srv := httptest.NewTLSServer(http.NotFoundHandler())
+	t.Cleanup(srv.Close)
+	issuer = srv.URL + "/idp"
+	return "\n[login_gate]\nissuer = \"" + issuer + "\"\nclient_id = \"hush-cli\"\ngroup = \"hush-admin\"\nredirect_uri = \"" + srv.URL + "/cb\"\nrelay = \"" + srv.URL + "/code\"\n", issuer
+}
+
+const untrusted = `login gate: discover ISSUER/.well-known/openid-configuration: Get "ISSUER/.well-known/openid-configuration": tls: failed to verify certificate: x509: certificate signed by unknown authority`
 
 func TestCredOverlayCommands(t *testing.T) {
 	old := overlayNow
@@ -101,7 +112,7 @@ func TestCredOverlayCommands(t *testing.T) {
 	cases := []struct {
 		name   string
 		args   []string
-		gate   string
+		gate   bool // a [login_gate] the CLI cannot sign in at
 		status int
 		answer string
 		calls  int // requests that reached the socket
@@ -111,36 +122,41 @@ func TestCredOverlayCommands(t *testing.T) {
 		out    string         // the exact stdout
 		err    string         // the exact error ("" = none)
 	}{
-		{"grant", []string{"grant", "keel", "grant-ghe", "--for", "1h", "--reason", "review"}, "", 201, entry, 1, "POST", "/v1/grants",
+		{"grant", []string{"grant", "keel", "grant-ghe", "--for", "1h", "--reason", "review"}, false, 201, entry, 1, "POST", "/v1/grants",
 			map[string]any{"subject": "keel", "grant": "grant-ghe", "reason": "review", "expires_at": "2026-11-19T13:00:00Z"}, "0123456789abcdef\n", ""},
-		{"grant for the 30 d cap", []string{"grant", "keel", "grant-ghe", "--for", "720h", "--reason", "r"}, "", 201, entry, 1, "POST", "/v1/grants",
+		{"grant for the 30 d cap", []string{"grant", "keel", "grant-ghe", "--for", "720h", "--reason", "r"}, false, 201, entry, 1, "POST", "/v1/grants",
 			map[string]any{"subject": "keel", "grant": "grant-ghe", "reason": "r", "expires_at": "2026-12-19T12:00:00Z"}, "0123456789abcdef\n", ""},
-		{"suspend until lifted sends no expiry", []string{"suspend", "keel", "*", "--reason", "incident"}, "", 201, entry, 1, "POST", "/v1/suspensions",
+		{"suspend until lifted sends no expiry", []string{"suspend", "keel", "*", "--reason", "incident"}, false, 201, entry, 1, "POST", "/v1/suspensions",
 			map[string]any{"subject": "keel", "grant": "*", "reason": "incident"}, "0123456789abcdef\n", ""},
-		{"suspend for an hour", []string{"suspend", "keel", "grant-ghe", "--for", "1h", "--reason", "x"}, "", 201, entry, 1, "POST", "/v1/suspensions",
+		{"suspend for an hour", []string{"suspend", "keel", "grant-ghe", "--for", "1h", "--reason", "x"}, false, 201, entry, 1, "POST", "/v1/suspensions",
 			map[string]any{"subject": "keel", "grant": "grant-ghe", "reason": "x", "expires_at": "2026-11-19T13:00:00Z"}, "0123456789abcdef\n", ""},
-		{"revoke", []string{"revoke", "0123456789abcdef"}, "", 204, "", 1, "DELETE", "/v1/grants/0123456789abcdef", nil, "", ""},
-		{"lift", []string{"lift", "0123456789abcdef"}, "", 204, "", 1, "DELETE", "/v1/suspensions/0123456789abcdef", nil, "", ""},
-		{"ls", []string{"ls"}, "", 200, `{"sequence":3,"grants":[` + entry + `],"suspensions":[]}`, 1, "GET", "/v1/overlay", nil,
+		{"revoke", []string{"revoke", "0123456789abcdef"}, false, 204, "", 1, "DELETE", "/v1/grants/0123456789abcdef", nil, "", ""},
+		{"lift", []string{"lift", "0123456789abcdef"}, false, 204, "", 1, "DELETE", "/v1/suspensions/0123456789abcdef", nil, "", ""},
+		{"ls", []string{"ls"}, false, 200, `{"sequence":3,"grants":[` + entry + `],"suspensions":[]}`, 1, "GET", "/v1/overlay", nil,
 			"KIND   ID                SUBJECT  GRANT      EXPIRES               BY       REASON\ngrant  0123456789abcdef  keel     grant-ghe  2030-01-01T00:00:00Z  admin:0  r\n", ""},
-		{"ls reads without the gate's sign-in", []string{"ls"}, deadGate, 200, `{"sequence":0,"grants":[],"suspensions":[]}`, 1, "GET", "/v1/overlay", nil,
+		{"ls reads without the gate's sign-in", []string{"ls"}, true, 200, `{"sequence":0,"grants":[],"suspensions":[]}`, 1, "GET", "/v1/overlay", nil,
 			"KIND  ID  SUBJECT  GRANT  EXPIRES  BY  REASON\n", ""},
-		{"a server refusal surfaces exactly", []string{"grant", "keel", "grant-ghe", "--for", "1h", "--reason", "x"}, "", 409, `{"error":"overlay_full","reason":"keel holds 16 temporary grants; revoke one first"}`, 1, "POST", "/v1/grants",
+		{"a server refusal surfaces exactly", []string{"grant", "keel", "grant-ghe", "--for", "1h", "--reason", "x"}, false, 409, `{"error":"overlay_full","reason":"keel holds 16 temporary grants; revoke one first"}`, 1, "POST", "/v1/grants",
 			map[string]any{"subject": "keel", "grant": "grant-ghe", "reason": "x", "expires_at": "2026-11-19T13:00:00Z"}, "", "POST /v1/grants: 409 overlay_full: keel holds 16 temporary grants; revoke one first"},
-		{"a write with a gate signs in first (no request on failure)", []string{"grant", "keel", "grant-ghe", "--for", "1h", "--reason", "x"}, deadGate, 201, entry, 0, "", "", nil, "", "login gate: discover https://127.0.0.1:1/idp/.well-known/openid-configuration: Get \"https://127.0.0.1:1/idp/.well-known/openid-configuration\": dial tcp 127.0.0.1:1: connect: connection refused"},
-		{"a delete with a gate signs in first", []string{"revoke", "0123456789abcdef"}, deadGate, 204, "", 0, "", "", nil, "", "login gate: discover https://127.0.0.1:1/idp/.well-known/openid-configuration: Get \"https://127.0.0.1:1/idp/.well-known/openid-configuration\": dial tcp 127.0.0.1:1: connect: connection refused"},
-		{"a grant without --for", []string{"grant", "keel", "grant-ghe", "--reason", "x"}, "", 201, entry, 0, "", "", nil, "", "--for must be positive (a grant always expires)"},
-		{"a negative --for", []string{"suspend", "keel", "*", "--for", "-1s", "--reason", "x"}, "", 201, entry, 0, "", "", nil, "", "--for must be positive (a grant always expires)"},
-		{"no --reason", []string{"grant", "keel", "grant-ghe", "--for", "1h"}, "", 201, entry, 0, "", "", nil, "", "--reason is required"},
-		{"a whitespace --reason", []string{"suspend", "keel", "*", "--reason", " \t"}, "", 201, entry, 0, "", "", nil, "", "--reason is required"},
+		{"a write with a gate signs in first (no request on failure)", []string{"grant", "keel", "grant-ghe", "--for", "1h", "--reason", "x"}, true, 201, entry, 0, "", "", nil, "", untrusted},
+		{"a delete with a gate signs in first", []string{"revoke", "0123456789abcdef"}, true, 204, "", 0, "", "", nil, "", untrusted},
+		{"a grant without --for", []string{"grant", "keel", "grant-ghe", "--reason", "x"}, false, 201, entry, 0, "", "", nil, "", "--for must be positive (a grant always expires)"},
+		{"a negative --for", []string{"suspend", "keel", "*", "--for", "-1s", "--reason", "x"}, false, 201, entry, 0, "", "", nil, "", "--for must be positive (a grant always expires)"},
+		{"no --reason", []string{"grant", "keel", "grant-ghe", "--for", "1h"}, false, 201, entry, 0, "", "", nil, "", "--reason is required"},
+		{"a whitespace --reason", []string{"suspend", "keel", "*", "--reason", " \t"}, false, 201, entry, 0, "", "", nil, "", "--reason is required"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			cfg, f := overlayRig(t, c.status, c.answer, c.gate)
+			gate, issuer := "", ""
+			if c.gate {
+				gate, issuer = untrustedGate(t)
+			}
+			cfg, f := overlayRig(t, c.status, c.answer, gate)
 			out, err := runOverlay(t, append(c.args, "--config", cfg)...)
 			got := f.seen()
-			if c.err == "" && err != nil || c.err != "" && (err == nil || err.Error() != c.err) {
-				t.Fatalf("%s: error %v, want %q", c.name, err, c.err)
+			want := strings.ReplaceAll(c.err, "ISSUER", issuer)
+			if want == "" && err != nil || want != "" && (err == nil || err.Error() != want) {
+				t.Fatalf("%s: error %v, want %q", c.name, err, want)
 			}
 			if out != c.out {
 				t.Fatalf("%s: stdout %q, want %q", c.name, out, c.out)

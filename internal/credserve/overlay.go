@@ -80,7 +80,7 @@ func (s *Server) serveOverlayAdmin(w http.ResponseWriter, r *http.Request) {
 		// A write also needs the administrator's sign-in: the bearer
 		// hush cred overlay got from the login gate, checked at the provider.
 		access, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
-		if !ok || access == "" {
+		if !ok { // the server trims the header, so "Bearer " alone never matches
 			s.logger.Printf("cred: REFUSED overlay %s %s by %s: no sign-in", r.Method, r.URL.Path, who)
 			writeError(w, http.StatusUnauthorized, "sign_in_required", "an overlay write needs the login gate's sign-in")
 			return

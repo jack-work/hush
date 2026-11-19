@@ -21,7 +21,8 @@ const SystemdFDName = "loadcredential"
 
 // Systemd is the LoadCredential socket: a unit that says
 // LoadCredential=<id>:<socket> receives the raw token of the instance its
-// grant names, or nothing at all.
+// grant names, or of the instance <id> names under a live consent grant to
+// principal systemd:<unit>, or nothing at all.
 type Systemd struct {
 	Socket string `toml:"socket"`
 	// ManagerUID is the only peer uid served: systemd's own (0). A process
@@ -131,12 +132,27 @@ func (s *Server) answerSystemd(c net.Conn) {
 		s.logger.Printf("systemd: REFUSED a peer whose address is not systemd's /unit/<unit>/<id>")
 		return
 	}
-	name := sd.Units[unit][id]
-	if name == "" {
+	// The one grant check: the unit's own grant for this id, else a live consent
+	// grant to principal systemd:<unit> for the instance the id names.
+	principal := "systemd:" + unit
+	name, static := sd.Units[unit][id], map[string]bool{}
+	if name != "" {
+		static[name] = true
+	} else {
+		name = id
+	}
+	grant, err := s.authorizeCred(PrincipalAuth{Name: principal, Credentials: static}, name)
+	if err != nil {
 		s.logger.Printf("systemd: REFUSED %s credential %q: no grant", unit, id)
 		return
 	}
-	token, status := s.rawToken(name)
+	token, status := "", http.StatusNotFound
+	if _, ok := s.cfg.Instances[name]; ok {
+		token, status = s.rawToken(name)
+	}
+	if grant != nil {
+		s.logConsentUse(grant, principal, name, uid, status)
+	}
 	if s.cfg.Instances[name].Audit {
 		s.logger.Printf("cred: audit %s principal=systemd:%s uid=%d -> %d", name, unit, uid, status)
 	}

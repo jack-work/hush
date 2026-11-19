@@ -35,13 +35,13 @@ func grantsFile(rows ...ConsentGrant) []byte {
 	return b
 }
 
-// consentRig serves boxPrincipal with consent grants read from a temp file; put replaces the file atomically.
-func consentRig(t *testing.T) (p *prig, put func([]byte)) {
+// useConsentFile points p at a temp consent grants file and returns put, which
+// replaces the file atomically (nil removes it).
+func useConsentFile(t *testing.T, p *prig) (put func([]byte)) {
 	t.Helper()
-	p = newPrincipalRig(t, "", boxPrincipal)
 	path := filepath.Join(t.TempDir(), "grants.json")
 	p.cfg.ConsentGrants = path
-	return p, func(raw []byte) {
+	return func(raw []byte) {
 		t.Helper()
 		if raw == nil {
 			_ = os.Remove(path)
@@ -54,6 +54,21 @@ func consentRig(t *testing.T) (p *prig, put func([]byte)) {
 			t.Fatal(err)
 		}
 	}
+}
+
+// oversized is a valid grants file one byte past the read bound.
+func oversized(row ConsentGrant) []byte {
+	pad := ConsentGrant{ID: "pad"}
+	raw := grantsFile(row, pad)
+	pad.ApprovedBy = strings.Repeat("x", maxConsentFile+1-len(raw))
+	return grantsFile(row, pad)
+}
+
+// consentRig serves boxPrincipal with consent grants read from a temp file.
+func consentRig(t *testing.T) (*prig, func([]byte)) {
+	t.Helper()
+	p := newPrincipalRig(t, "", boxPrincipal)
+	return p, useConsentFile(t, p)
 }
 
 func TestConsentGrants(t *testing.T) {
@@ -75,6 +90,7 @@ func TestConsentGrants(t *testing.T) {
 		{name: "grant for another credential", file: grantsFile(grantRow("box", "something-else", time.Hour)), status: 403, errCode: "not_granted"},
 		{name: "empty file", file: grantsFile(), status: 403, errCode: "not_granted"},
 		{name: "no file", file: nil, status: 403, errCode: "not_granted", logs: "consent grants unreadable"},
+		{name: "oversized file, live grant inside", file: oversized(grantRow("box", instName, time.Hour)), status: 403, errCode: "not_granted", logs: "larger than"},
 		{name: "malformed file", file: []byte(`{"grants": [`), status: 403, errCode: "not_granted", logs: "consent grants unreadable"},
 		{name: "past expires_at by the clock, row still in the file", file: grantsFile(grantRow("box", instName, time.Hour)),
 			setup: func(p *prig) { p.srv.Now = func() time.Time { return time.Now().Add(2 * time.Hour) } }, status: 403, errCode: "not_granted"},

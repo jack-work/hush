@@ -40,12 +40,10 @@ func Spawn(exe string, args, extraEnv []string, id io.WriterTo, opts Options) (i
 		pr.Close()
 		return 0, fmt.Errorf("start daemon: %w", err)
 	}
-	go child.Wait()
-	if place, ok := placeAgent(os.Getenv, ownManagerSocket, opts.Instance); ok {
-		if err := moveIntoScope(place, child.Process.Pid); err != nil && logf != nil {
-			fmt.Fprintf(logf, "hush: agent left in the spawner's cgroup, so it ends with the spawner's unit: %v\n", err)
-		}
+	if err := scopeAgent(child.Process.Pid, opts.Instance); err != nil && logf != nil {
+		fmt.Fprintf(logf, "hush: agent left in the spawner's cgroup, so it ends with the spawner's unit: %v\n", err)
 	}
+	go child.Wait()
 
 	pr.Close() // parent does not read
 	if _, err := id.WriteTo(pw); err != nil {
@@ -95,4 +93,12 @@ func ReadIdentity() ([]byte, error) {
 		return nil, fmt.Errorf("read identity from pipe: %w", err)
 	}
 	return raw, nil
+}
+
+var scopeAgent = func(pid int, instance string) error {
+	place, ok := placeAgent(os.Getenv, ownManagerSocket, instance)
+	if !ok {
+		return nil
+	}
+	return moveIntoScope(place, pid)
 }

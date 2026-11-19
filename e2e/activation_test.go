@@ -8,7 +8,9 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -143,16 +145,77 @@ func (w *world) writeUnlockableIdentity(t *testing.T, passphrase string) {
 	}
 }
 
-// waitForListener waits for the activator to bind, which is not the same
-// question as "is an agent running" — connecting is what starts one.
+// waitForListener waits until the activator's socket is LISTENING, without
+// connecting to it: connecting is what starts the agent. The node exists from
+// bind(), before listen(); a client in that gap is refused ("ain't running").
 func waitForListener(t *testing.T, sockPath string) {
 	t.Helper()
 	deadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) {
-		if _, err := os.Stat(sockPath); err == nil {
+		if listening(t, sockPath) {
 			return
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
-	t.Fatalf("activator never bound %s", sockPath)
+	t.Fatalf("activator never listened on %s", sockPath)
+}
+
+// soAcceptCon is __SO_ACCEPTCON, the /proc/net/unix Flags bit of a socket
+// that has called listen().
+const soAcceptCon = 0x10000
+
+// listening reports whether a unix socket bound at path is listening, from
+// /proc/net/unix (columns: Num RefCount Protocol Flags Type St Inode Path).
+func listening(t *testing.T, path string) bool {
+	t.Helper()
+	data, err := os.ReadFile("/proc/net/unix")
+	if err != nil {
+		t.Fatalf("read /proc/net/unix: %v", err)
+	}
+	for _, line := range strings.Split(string(data), "\n")[1:] {
+		f := strings.Fields(line)
+		if len(f) < 8 || f[7] != path {
+			continue
+		}
+		flags, err := strconv.ParseUint(f[3], 16, 32)
+		if err != nil {
+			t.Fatalf("/proc/net/unix flags %q: %v", f[3], err)
+		}
+		if flags&soAcceptCon != 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// TestListeningIsTrueOnlyAfterListen pins waitForListener's question: a bound
+// socket that has not called listen() is the state the activation flake hit
+// (the node exists, connect is refused). RED if listening() goes back to
+// "the node exists".
+func TestListeningIsTrueOnlyAfterListen(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "s.sock")
+	if listening(t, path) {
+		t.Fatal("absent socket: listening = true, want false")
+	}
+	fd, err := syscall.Socket(syscall.AF_UNIX, syscall.SOCK_STREAM, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer syscall.Close(fd)
+	if err := syscall.Bind(fd, &syscall.SockaddrUnix{Name: path}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("control: bind made no node: %v", err)
+	}
+	if listening(t, path) {
+		t.Fatal("bound, not listening: listening = true, want false")
+	}
+	if err := syscall.Listen(fd, 1); err != nil {
+		t.Fatal(err)
+	}
+	if !listening(t, path) {
+		t.Fatal("listening socket: listening = false, want true")
+	}
 }

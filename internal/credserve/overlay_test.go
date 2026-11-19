@@ -308,3 +308,72 @@ func TestOverlayAdminSocketRefusesOtherUIDs(t *testing.T) {
 		t.Fatalf("no refusal line:\n%s", p.logs.String())
 	}
 }
+
+// TestOverlayWritesNeedTheGateSignIn: with a login gate, an overlay write on
+// the admin socket also needs a bearer the provider honours for a member of
+// the gate's group; reads do not.
+func TestOverlayWritesNeedTheGateSignIn(t *testing.T) {
+	var base string
+	p := newPrincipalRig(t, "me", overlayPrincipals, func(r *rig) {
+		base = r.ep.srv.URL
+		r.cfg.LoginGate = &LoginGate{Issuer: base + "/idp", ClientID: "hush-cli", Group: "hush-admin",
+			RedirectURI: "https://relay.example/cb", Relay: base + "/relay"}
+		if err := r.cfg.LoginGate.validate(); err != nil {
+			t.Fatal(err)
+		}
+		r.srv.LoginClient = FencedClient(r.cfg.EgressHosts(), r.ep.roots())
+		r.srv.SetOverlayFile(filepath.Join(r.stateDir, "overlay.json"))
+		r.srv.SetOverlayAdmins(map[uint32]bool{uint32(os.Getuid()): true})
+		r.ep.setAnswer(func(_ int64, req *http.Request) (int, string) {
+			switch req.URL.Path {
+			case "/idp/.well-known/openid-configuration":
+				return 200, fmt.Sprintf(`{"issuer":%[1]q,"token_endpoint":"%[1]s/token","userinfo_endpoint":"%[1]s/userinfo"}`, base+"/idp")
+			case "/idp/userinfo":
+				switch req.Header.Get("Authorization") {
+				case "Bearer tok-admin":
+					return 200, `{"preferred_username":"jack","groups":["hush-admin@idm.example"]}`
+				case "Bearer tok-other":
+					return 200, `{"preferred_username":"eve","groups":["users@idm.example"]}`
+				}
+				return 401, `{"error":"invalid_token"}`
+			}
+			return 404, `{}`
+		})
+	})
+	for _, c := range []struct {
+		name, method, path, bearer string
+		status                     int
+	}{
+		{"read needs no sign-in", http.MethodGet, overlayReadPath, "", 200},
+		{"write without a sign-in", http.MethodPost, grantsPath, "", 401},
+		{"write with a dead token", http.MethodPost, grantsPath, "tok-expired", 403},
+		{"write by a non-member", http.MethodPost, suspensionsPath, "tok-other", 403},
+		{"delete without a sign-in", http.MethodDelete, grantsPath + "/0123456789abcdef", "", 401},
+		{"write by a member", http.MethodPost, grantsPath, "tok-admin", 201},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			var h map[string]string
+			if c.bearer != "" {
+				h = map[string]string{"Authorization": "Bearer " + c.bearer}
+			}
+			body := ""
+			if c.method == http.MethodPost {
+				body = oneHour
+			}
+			a := p.call("admin", c.method, c.path, body, h)
+			if a.status != c.status {
+				t.Fatalf("got %d %q, want %d", a.status, a.raw, c.status)
+			}
+			if c.status == 201 {
+				var e policy.Entry
+				_ = json.Unmarshal([]byte(a.raw), &e)
+				if want := fmt.Sprintf("admin:%d:jack", os.Getuid()); e.ApprovedBy != want {
+					t.Fatalf("approved_by %q, want %q", e.ApprovedBy, want)
+				}
+			}
+		})
+	}
+	if o := readOverlay(t, p); len(o.Grants) != 1 || len(o.Suspensions) != 0 {
+		t.Fatalf("only the member's write may land: %+v", o)
+	}
+}

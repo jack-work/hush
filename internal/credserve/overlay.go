@@ -75,7 +75,25 @@ func (s *Server) serveOverlayAdmin(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusForbidden, "forbidden", "peer not allowed")
 		return
 	}
-	if !s.overlayRoute(w, r, true, true, "admin:"+strconv.FormatUint(uint64(uid), 10)) {
+	who := "admin:" + strconv.FormatUint(uint64(uid), 10)
+	if g := s.cfg.LoginGate; g != nil && r.Method != http.MethodGet {
+		// A write also needs the administrator's sign-in: the bearer
+		// hush cred overlay got from the login gate, checked at the provider.
+		access, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
+		if !ok || access == "" {
+			s.logger.Printf("cred: REFUSED overlay %s %s by %s: no sign-in", r.Method, r.URL.Path, who)
+			writeError(w, http.StatusUnauthorized, "sign_in_required", "an overlay write needs the login gate's sign-in")
+			return
+		}
+		user, err := g.Member(r.Context(), s.loginClient(), access)
+		if err != nil {
+			s.logger.Printf("cred: REFUSED overlay %s %s by %s: %v", r.Method, r.URL.Path, who, err)
+			writeError(w, http.StatusForbidden, "forbidden", err.Error())
+			return
+		}
+		who += ":" + user
+	}
+	if !s.overlayRoute(w, r, true, true, who) {
 		writeError(w, http.StatusNotFound, "not_found", "the overlay admin socket serves the overlay only")
 	}
 }

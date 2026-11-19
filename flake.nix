@@ -23,7 +23,7 @@
           pname = "hush";
           version = "0.17.0";
           src = self;
-          vendorHash = "sha256-lBR9vKupRfWpkSTZN0UZRBXWRsTvWRTsGXCmzaWwSZs=";
+          vendorHash = "sha256-/UUCtv5cvtKImWE1rh89DMwHS2qKN0pRCyKFz3dxlYA=";
           subPackages = [ "." ];
           env.CGO_ENABLED = 0;
 

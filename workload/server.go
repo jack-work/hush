@@ -12,8 +12,12 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"regexp"
+	"slices"
+	"strings"
 	"sync"
 	"time"
+	"unicode"
 
 	"github.com/jack-work/hush/bundle"
 	"github.com/jack-work/hush/ca"
@@ -33,6 +37,10 @@ type Server struct {
 	Policy Policy
 	Now    func() time.Time
 	Log    *slog.Logger
+	// Creds names JWT-SVIDs a credential-socket client can fetch: GET
+	// /cred/<name> answers the CALLER's own JWT-SVID for that name's
+	// audiences, in hush cred serve's response shape.
+	Creds map[string][]string
 
 	mu   sync.RWMutex
 	auth Authority
@@ -61,6 +69,7 @@ func (s *Server) Serve(ctx context.Context, l net.Listener) error {
 	mux.HandleFunc("POST /v1/x509-svid", s.x509)
 	mux.HandleFunc("POST /v1/jwt-svid", s.jwt)
 	mux.HandleFunc("GET /v1/bundle", s.bundle)
+	mux.HandleFunc("GET /cred/{name}", s.cred)
 	srv := &http.Server{
 		Handler:           mux,
 		ReadHeaderTimeout: 5 * time.Second,
@@ -196,18 +205,80 @@ func (s *Server) jwt(w http.ResponseWriter, r *http.Request) {
 		fail(w, http.StatusBadRequest, "bad_request", err.Error())
 		return
 	}
+	if tok, exp, ok := s.issueJWT(w, id, req.Audience); ok {
+		reply(w, JWTResponse{SPIFFEID: id.String(), Token: tok, ExpiresAt: exp})
+	}
+}
+
+func (s *Server) issueJWT(w http.ResponseWriter, id spiffeid.ID, audience []string) (string, time.Time, bool) {
 	a := s.authority()
 	if a.JWTKey == nil {
 		fail(w, http.StatusServiceUnavailable, "unavailable", "no jwt key")
-		return
+		return "", time.Time{}, false
 	}
-	tok, exp, err := ca.IssueJWTSVID(a.JWTKey, a.JWTKeyID, id, req.Audience, s.Now(), 0)
+	tok, exp, err := ca.IssueJWTSVID(a.JWTKey, a.JWTKeyID, id, audience, s.Now(), 0)
 	if err != nil {
 		fail(w, http.StatusBadRequest, "bad_request", err.Error())
+		return "", time.Time{}, false
+	}
+	s.Log.Info("jwt-svid issued", "spiffe_id", id.String(), "audience", fmt.Sprint(audience), "expires", exp)
+	return tok, exp, true
+}
+
+// credNameRE is one URL path segment; an audience is any text without spaces
+// or commas.
+var credNameRE = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
+
+// ParseCreds reads name=aud[,aud] rows for Server.Creds.
+func ParseCreds(raw []string) (map[string][]string, error) {
+	rows := map[string][]string{}
+	for _, r := range raw {
+		name, auds, ok := strings.Cut(r, "=")
+		list := strings.Split(auds, ",")
+		if !ok || !credNameRE.MatchString(name) || slices.ContainsFunc(list, func(a string) bool { return a == "" || strings.ContainsFunc(a, unicode.IsSpace) }) {
+			return nil, fmt.Errorf("cred %q: want name=aud[,aud]", r)
+		}
+		if _, dup := rows[name]; dup {
+			return nil, fmt.Errorf("cred %s given twice", name)
+		}
+		rows[name] = list
+	}
+	return rows, nil
+}
+
+// CredResponse is hush cred serve's answer, so a [cred] client reads either.
+type CredResponse struct {
+	Name      string `json:"name"`
+	Token     string `json:"token"`
+	ExpiresAt int64  `json:"expires_at"`
+}
+
+// cred answers GET /cred/<name>[?audience=a]: the caller's own JWT-SVID for
+// the name's audiences, or for the ones it asks for if all are among them.
+func (s *Server) cred(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	allowed, ok := s.Creds[name]
+	if !ok {
+		fail(w, http.StatusNotFound, "not_found", "no cred "+name)
 		return
 	}
-	s.Log.Info("jwt-svid issued", "spiffe_id", id.String(), "audience", fmt.Sprint(req.Audience), "expires", exp)
-	reply(w, JWTResponse{SPIFFEID: id.String(), Token: tok, ExpiresAt: exp})
+	audience := allowed
+	if asked := r.URL.Query()["audience"]; len(asked) > 0 {
+		for _, a := range asked {
+			if !slices.Contains(allowed, a) {
+				fail(w, http.StatusBadRequest, "bad_request", fmt.Sprintf("audience %q is not %s's", a, name))
+				return
+			}
+		}
+		audience = asked
+	}
+	id, ok := s.identify(w, r)
+	if !ok {
+		return
+	}
+	if tok, exp, ok := s.issueJWT(w, id, audience); ok {
+		reply(w, CredResponse{Name: name, Token: tok, ExpiresAt: exp.Unix()})
+	}
 }
 
 func (s *Server) bundle(w http.ResponseWriter, r *http.Request) {

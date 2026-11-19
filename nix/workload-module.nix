@@ -46,6 +46,13 @@ in
       description = "Host path of an ECDSA P-256 key for JWT-SVIDs, by LoadCredential. Null refuses JWT-SVIDs.";
     };
 
+    creds = mkOption {
+      type = types.attrsOf (types.nonEmptyListOf (types.strMatching "[^,=[:space:]]+"));
+      default = { };
+      example = { svid-front = [ "front" ]; };
+      description = "Names a credential-socket client may GET /cred/<name> on the workload socket for: the CALLER's own JWT-SVID with these audiences, in hush cred serve's answer shape. Needs jwtKey.";
+    };
+
     socketPath = mkOption {
       type = types.str;
       readOnly = true;
@@ -62,6 +69,14 @@ in
       {
         assertion = cfg.jwtKey == null || !(lib.hasPrefix builtins.storeDir cfg.jwtKey);
         message = "services.hush-workload.jwtKey is in the world-readable store; give a host path";
+      }
+      {
+        assertion = cfg.creds == { } || cfg.jwtKey != null;
+        message = "services.hush-workload.creds answer JWT-SVIDs: set jwtKey";
+      }
+      {
+        assertion = lib.all (n: builtins.match "[A-Za-z0-9][A-Za-z0-9._-]*" n != null) (lib.attrNames cfg.creds);
+        message = "services.hush-workload.creds names are one URL path segment ([A-Za-z0-9][A-Za-z0-9._-]*)";
       }
     ];
 
@@ -89,7 +104,8 @@ in
           "--root-cert" "${cfg.rootCert}"
           "--intermediate-cert" "${cfg.intermediateCert}"
           "--intermediate-key" "%d/intermediate"
-        ] ++ lib.optionals (cfg.jwtKey != null) [ "--jwt-key" "%d/jwt" ]);
+        ] ++ lib.optionals (cfg.jwtKey != null) [ "--jwt-key" "%d/jwt" ]
+          ++ lib.concatLists (lib.mapAttrsToList (n: auds: [ "--cred" "${n}=${lib.concatStringsSep "," auds}" ]) cfg.creds));
         LoadCredential = [ "intermediate:${cfg.intermediateKey}" ]
           ++ lib.optional (cfg.jwtKey != null) "jwt:${cfg.jwtKey}";
         DynamicUser = true;

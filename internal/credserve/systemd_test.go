@@ -38,9 +38,9 @@ copilot = "copilot-work"
 `, managerUID)
 }
 
-func newSystemdRig(t *testing.T, managerUID uint32) *srig {
+func newSystemdRig(t *testing.T, managerUID uint32, before ...func(*rig)) *srig {
 	t.Helper()
-	p := newPrincipalRig(t, "", systemdConfig(managerUID))
+	p := newPrincipalRig(t, "", systemdConfig(managerUID), before...)
 	dir, err := os.MkdirTemp("", "sdsock-*")
 	if err != nil {
 		t.Fatal(err)
@@ -216,8 +216,9 @@ func TestSystemdConsentGrants(t *testing.T) {
 			file: grantsFile(grantRow("systemd:"+unit, "not-an-instance", time.Hour)), log: "-> 404"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			s := newSystemdRig(t, me())
-			useConsentFile(t, s.prig)(c.file)
+			path, put := consentFile(t)
+			s := newSystemdRig(t, me(), withConsent(path))
+			put(c.file)
 			if got := s.load(c.unit, c.id); got != c.want {
 				t.Fatalf("got %q, want %q", got, c.want)
 			}

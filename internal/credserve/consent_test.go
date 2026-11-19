@@ -35,13 +35,13 @@ func grantsFile(rows ...ConsentGrant) []byte {
 	return b
 }
 
-// useConsentFile points p at a temp consent grants file and returns put, which
-// replaces the file atomically (nil removes it).
-func useConsentFile(t *testing.T, p *prig) (put func([]byte)) {
+// consentFile is a temp consent grants file: its path, and put, which replaces
+// it atomically (nil removes it). The file may change while serving; the
+// config may not, so point a rig at path with withConsent.
+func consentFile(t *testing.T) (string, func([]byte)) {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "grants.json")
-	p.cfg.ConsentGrants = path
-	return func(raw []byte) {
+	return path, func(raw []byte) {
 		t.Helper()
 		if raw == nil {
 			_ = os.Remove(path)
@@ -56,6 +56,8 @@ func useConsentFile(t *testing.T, p *prig) (put func([]byte)) {
 	}
 }
 
+func withConsent(path string) func(*rig) { return func(r *rig) { r.cfg.ConsentGrants = path } }
+
 // oversized is a valid grants file one byte past the read bound.
 func oversized(row ConsentGrant) []byte {
 	pad := ConsentGrant{ID: "pad"}
@@ -64,11 +66,12 @@ func oversized(row ConsentGrant) []byte {
 	return grantsFile(row, pad)
 }
 
-// consentRig serves boxPrincipal with consent grants read from a temp file.
-func consentRig(t *testing.T) (*prig, func([]byte)) {
+// consentRig serves boxPrincipal with consent grants read from a temp file; before
+// runs after the consent setting, before serving.
+func consentRig(t *testing.T, before ...func(*rig)) (*prig, func([]byte)) {
 	t.Helper()
-	p := newPrincipalRig(t, "", boxPrincipal)
-	return p, useConsentFile(t, p)
+	path, put := consentFile(t)
+	return newPrincipalRig(t, "", boxPrincipal, append([]func(*rig){withConsent(path)}, before...)...), put
 }
 
 func TestConsentGrants(t *testing.T) {
@@ -76,7 +79,7 @@ func TestConsentGrants(t *testing.T) {
 		name    string
 		file    []byte
 		cred    string
-		setup   func(*prig)
+		setup   func(*rig)
 		status  int
 		errCode string
 		token   string
@@ -93,20 +96,21 @@ func TestConsentGrants(t *testing.T) {
 		{name: "oversized file, live grant inside", file: oversized(grantRow("box", instName, time.Hour)), status: 403, errCode: "not_granted", logs: "larger than"},
 		{name: "malformed file", file: []byte(`{"grants": [`), status: 403, errCode: "not_granted", logs: "consent grants unreadable"},
 		{name: "past expires_at by the clock, row still in the file", file: grantsFile(grantRow("box", instName, time.Hour)),
-			setup: func(p *prig) { p.srv.Now = func() time.Time { return time.Now().Add(2 * time.Hour) } }, status: 403, errCode: "not_granted"},
+			setup: func(r *rig) { r.srv.Now = func() time.Time { return time.Now().Add(2 * time.Hour) } }, status: 403, errCode: "not_granted"},
 		{name: "consent grants off ignores the file", file: grantsFile(grantRow("box", instName, time.Hour)),
-			setup: func(p *prig) { p.cfg.ConsentGrants = "" }, status: 403, errCode: "not_granted"},
+			setup: func(r *rig) { r.cfg.ConsentGrants = "" }, status: 403, errCode: "not_granted"},
 		{name: "grant for a name that is no instance", file: grantsFile(grantRow("box", "not-an-instance", time.Hour)),
 			cred: "not-an-instance", status: 404, errCode: "unknown_credential", used: true},
 		// copilot-work is granted by config and not signed in: past the grant check, not a consent use.
 		{name: "static grant is not a consent use", file: grantsFile(), cred: "copilot-work", status: 503, errCode: "credential_stale"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			p, put := consentRig(t)
-			put(c.file)
+			var before []func(*rig)
 			if c.setup != nil {
-				c.setup(p)
+				before = append(before, c.setup)
 			}
+			p, put := consentRig(t, before...)
+			put(c.file)
 			cred := c.cred
 			if cred == "" {
 				cred = instName

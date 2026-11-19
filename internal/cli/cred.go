@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/signal"
 	"os/user"
+	"path/filepath"
 	"strconv"
 	"syscall"
 
@@ -124,6 +125,7 @@ func runCredServe(cmd *cobra.Command, _ []string) (result error) {
 
 	srv := credserve.NewServer(conf, mgr, uid, logger)
 	srv.SetPrincipals(principals, conf.AllowUser != "")
+	srv.SetStaleFile(filepath.Join(stateDir, "stale.json"))
 	ctx, stop := signal.NotifyContext(cmd.Context(), syscall.SIGTERM, syscall.SIGINT)
 	defer stop()
 	if conf.AllowUser != "" {

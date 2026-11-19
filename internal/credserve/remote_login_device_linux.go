@@ -54,7 +54,7 @@ func (s *Server) startDeviceLogin(w http.ResponseWriter, r *http.Request, name s
 	}
 	if err := s.mgr.BeginLogin(name); err != nil {
 		s.mu.Unlock()
-		writeOperationError(w, name, err)
+		s.writeOperationError(w, name, err)
 		return
 	}
 	handle, err := loginNonce()
@@ -177,7 +177,7 @@ func (s *Server) completeDeviceLogin(w http.ResponseWriter, r *http.Request, nam
 	s.mgr.CancelLogin(name)
 	if err != nil {
 		s.logger.Printf("cred: %s: remote device sign-in could not be stored", name)
-		writeOperationError(w, name, err)
+		s.writeOperationError(w, name, err)
 		return
 	}
 	s.logger.Printf("cred: %s: remote device sign-in complete", name)

@@ -70,7 +70,7 @@ func gateRig(t *testing.T, p *idp) (*Login, *syncBuffer, func() idp) {
 	l.Out, l.pollEvery = out, time.Second
 	base := r.ep.srv.URL
 	r.cfg.LoginGate = &LoginGate{Issuer: base + "/idp", ClientID: "hush-cli", Group: "hush-admin",
-		RedirectURI: "https://relay.example/callback", Relay: base + "/relay", Wait: "2s"}
+		RedirectURI: "https://relay.example/callback", Relay: base + "/relay", Wait: "10s"}
 	if err := r.cfg.LoginGate.validate(); err != nil {
 		t.Fatal(err)
 	}
@@ -196,7 +196,7 @@ func TestLoginGate(t *testing.T) {
 		{"relay answer not JSON", idp{relayBody: `a]b[c`}, "login gate: relay: the answer is not JSON", 1},
 		{"relay answer without a code", idp{relayBody: `{"code":""}`}, "login gate: relay: no code in the answer", 1},
 		{"relay refuses the request", idp{relay: []int{400}}, "login gate: relay 400: body of 2 bytes", 1},
-		{"nobody signs in: wait 2s at 1s polls is exactly 2 polls", idp{pending: true}, "login gate: no sign-in arrived in time", 2},
+		{"nobody signs in: wait 10s at 1s polls is exactly 10 polls", idp{pending: true}, "login gate: no sign-in arrived in time", 10},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

@@ -200,6 +200,17 @@ pkgs.testers.runNixOSTest {
             time.sleep(0.5)
         raise AssertionError(f"anthropic-work never came due: {doc}")
 
+    def figaro_gets(tag, together):
+        # 20 GET /cred calls from inside the VM in one command: a second or two, whatever the driver's latency.
+        sep = " &" if together else ";"
+        minter.succeed(
+            "for i in $(seq 20); do runuser -u figaro -- curl -s --unix-socket /run/hush/cred.sock "
+            f"http://m/cred/anthropic-work > /tmp/{tag}$i{sep} done; wait"
+        )
+        bodies = [minter.succeed(f"cat /tmp/{tag}{i}") for i in range(1, 21)]
+        replies.extend(bodies)
+        return bodies
+
     with subtest("cred socket: figaro's uid only; groups and other uids are refused"):
         status, doc = cred("figaro", 200)
         assert doc["token"] == "at-login-1", doc
@@ -253,22 +264,18 @@ pkgs.testers.runNixOSTest {
         wait_due()
         fake("mode", "slow")
         fake("expires_in", 45)
-        minter.succeed(
-            "for i in $(seq 20); do runuser -u figaro -- curl -s --unix-socket /run/hush/cred.sock "
-            "http://m/cred/anthropic-work > /tmp/r$i & done; wait"
-        )
+        bodies = figaro_gets("r", together=True)
         assert count("posts") == 1, count("posts")
-        for i in range(1, 21):
-            body = minter.succeed(f"cat /tmp/r{i}")
-            replies.append(body)
+        for body in bodies:
             assert json.loads(body)["token"] == "at-1", body
 
     with subtest("(ii) repeated calls cannot storm the endpoint"):
         fake("mode", "ok")
-        # Due again (at-1 lives 45 s) while the last refresh is under 30 s old: every call is paced.
+        # Due again (at-1 lives 45 s) about 15 s after the refresh above, so the 30 s pacing window has ~15 s left.
+        # The calls run inside the VM in one go: driver round trips (seconds each on a loaded worker) cannot carry
+        # them past the window, which is what failed before.
         wait_due()
-        for _ in range(20):
-            cred("figaro")
+        figaro_gets("s", together=False)
         assert count("posts") == 1, count("posts")
 
     with subtest("persist-before-use: killed between the POST and the write"):

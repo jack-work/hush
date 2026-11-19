@@ -35,6 +35,27 @@ type LoginGate struct {
 	Wait   string `toml:"wait"`
 
 	maxAge, wait time.Duration
+	// clock is time.Now and time.After; tests replace it.
+	clock gateClock
+}
+
+type gateClock struct {
+	now   func() time.Time
+	after func(time.Duration) <-chan time.Time
+}
+
+func (g *LoginGate) now() time.Time {
+	if g.clock.now != nil {
+		return g.clock.now()
+	}
+	return time.Now()
+}
+
+func (g *LoginGate) after(d time.Duration) <-chan time.Time {
+	if g.clock.after != nil {
+		return g.clock.after(d)
+	}
+	return time.After(d)
 }
 
 const gateSkew = 60 * time.Second
@@ -114,7 +135,7 @@ func (g *LoginGate) SignIn(ctx context.Context, c *http.Client, out io.Writer, e
 	if err != nil {
 		return "", "", fmt.Errorf("login gate: %w", err)
 	}
-	if err := g.checkIDToken(idToken, nonce, time.Now()); err != nil {
+	if err := g.checkIDToken(idToken, nonce, g.now()); err != nil {
 		return "", "", fmt.Errorf("login gate: %w", err)
 	}
 	if user, err = gateMember(ctx, c, d.UserinfoEndpoint, access, g.Group); err != nil {
@@ -148,8 +169,8 @@ func (g *LoginGate) relayCode(ctx context.Context, c *http.Client, state string,
 		every = time.Second
 	}
 	backoff := every
-	deadline := time.Now().Add(g.wait)
-	for time.Now().Before(deadline) {
+	deadline := g.now().Add(g.wait)
+	for g.now().Before(deadline) {
 		body, status, err := gateGet(ctx, c, g.Relay+"?"+url.Values{"state": {state}}.Encode(), "")
 		wait := every
 		switch {
@@ -180,7 +201,7 @@ func (g *LoginGate) relayCode(ctx context.Context, c *http.Client, state string,
 		select {
 		case <-ctx.Done():
 			return "", ctx.Err()
-		case <-time.After(min(wait, time.Until(deadline))):
+		case <-g.after(min(wait, deadline.Sub(g.now()))):
 		}
 	}
 	return "", errors.New("no sign-in arrived in time")

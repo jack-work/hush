@@ -20,6 +20,7 @@ type PrincipalAuth struct {
 	Credentials map[string]bool
 	Login       bool
 	Refresh     bool
+	Overlay     bool
 }
 
 // ResolvePrincipals turns the config's principals into uid sets, using
@@ -27,7 +28,7 @@ type PrincipalAuth struct {
 func ResolvePrincipals(c *Config, lookup func(string) (uint32, error)) (map[string]PrincipalAuth, error) {
 	out := make(map[string]PrincipalAuth, len(c.Principals))
 	for name, p := range c.Principals {
-		pa := PrincipalAuth{Name: name, UIDs: map[uint32]bool{}, Credentials: map[string]bool{}, Login: p.Login, Refresh: p.Refresh}
+		pa := PrincipalAuth{Name: name, UIDs: map[uint32]bool{}, Credentials: map[string]bool{}, Login: p.Login, Refresh: p.Refresh, Overlay: p.Overlay}
 		for _, u := range p.Users {
 			uid, err := lookup(u)
 			if err != nil {
@@ -94,6 +95,9 @@ func (s *Server) servePrincipal(w http.ResponseWriter, r *http.Request, name str
 		return
 	}
 	if p.Refresh && s.refreshRoute(w, r) {
+		return
+	}
+	if p.Overlay && s.overlayRoute(w, r, false, name) {
 		return
 	}
 	cred, found := strings.CutPrefix(r.URL.Path, "/cred/")

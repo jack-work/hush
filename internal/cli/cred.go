@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"syscall"
+	"time"
 
 	"filippo.io/age"
 	"github.com/spf13/cobra"
@@ -126,8 +127,10 @@ func runCredServe(cmd *cobra.Command, _ []string) (result error) {
 	srv := credserve.NewServer(conf, mgr, uid, logger)
 	srv.SetPrincipals(principals, conf.AllowUser != "")
 	srv.SetStaleFile(filepath.Join(stateDir, "stale.json"))
+	srv.SetOverlayFile(filepath.Join(stateDir, "overlay.json"))
 	ctx, stop := signal.NotifyContext(cmd.Context(), syscall.SIGTERM, syscall.SIGINT)
 	defer stop()
+	go srv.RunOverlaySweep(ctx, time.Minute)
 	if conf.AllowUser != "" {
 		logger.Printf("cred: serving %d instances to uid %d", len(conf.Instances), uid)
 	}

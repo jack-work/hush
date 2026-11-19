@@ -81,6 +81,11 @@ let
         default = false;
         description = "Allow POST /refresh/<name> on this socket too. It answers status, never a token.";
       };
+      overlay = mkOption {
+        type = types.bool;
+        default = false;
+        description = "Allow GET /v1/overlay on this socket: the live temporary grants and suspensions, for a gateway. The overlay is written on the owner socket only.";
+      };
       socketPath = mkOption {
         type = types.str;
         default = "${L.runDir}/${name}.sock";
@@ -206,7 +211,8 @@ let
       users = p.users;
       credentials = p.credentials;
       socket = p.socketPath;
-    } // lib.optionalAttrs p.login { login = true; } // lib.optionalAttrs p.refresh { refresh = true; };
+    } // lib.optionalAttrs p.login { login = true; } // lib.optionalAttrs p.refresh { refresh = true; }
+      // lib.optionalAttrs (p.overlay or false) { overlay = true; };
 
     instanceToml = i: lib.filterAttrs (_: v: v != null && v != "" && v != false) {
       kind = i.kind;

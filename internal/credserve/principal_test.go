@@ -137,17 +137,31 @@ func newPrincipalRig(t *testing.T, allow, extra string, before ...func(*rig)) *p
 
 func (p *prig) request(socket, method, path string) answer {
 	p.t.Helper()
-	req, _ := http.NewRequest(method, "http://minter"+path, nil)
+	return p.call(socket, method, path, "", nil)
+}
+
+// call sends body (none when empty) with header on socket's client.
+func (p *prig) call(socket, method, path, body string, header map[string]string) answer {
+	p.t.Helper()
+	var rd io.Reader
+	if body != "" {
+		rd = strings.NewReader(body)
+	}
+	req, _ := http.NewRequest(method, "http://minter"+path, rd)
+	for k, v := range header {
+		req.Header.Set(k, v)
+	}
 	res, err := p.clients[socket].Do(req)
 	if err != nil {
 		p.t.Fatal(err)
 	}
 	defer res.Body.Close()
-	body, _ := io.ReadAll(res.Body)
-	a := answer{status: res.StatusCode, raw: string(body)}
-	if err := json.Unmarshal(body, &a); err != nil {
-		p.t.Fatalf("answer %d is not JSON: %q", res.StatusCode, body)
+	out, _ := io.ReadAll(res.Body)
+	a := answer{status: res.StatusCode, raw: string(out)}
+	if len(out) > 0 && !json.Valid(out) {
+		p.t.Fatalf("answer %d is not JSON: %q", res.StatusCode, out)
 	}
+	_ = json.Unmarshal(out, &a) // best effort: an overlay grant's expires_at is a time, not a number
 	return a
 }
 

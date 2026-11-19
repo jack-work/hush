@@ -50,6 +50,9 @@ type Principal struct {
 	Socket      string   `toml:"socket"`
 	Login       bool     `toml:"login"`
 	Refresh     bool     `toml:"refresh"`
+	// Overlay lets this socket read the runtime overlay (GET /v1/overlay);
+	// the overlay is written on the owner socket only.
+	Overlay bool `toml:"overlay"`
 }
 
 type Config struct {
@@ -150,7 +153,7 @@ func (p Principal) validate(name string, instances map[string]Instance, consent 
 			return fail("an empty user")
 		}
 	}
-	if len(p.Credentials) == 0 && !p.Login && !p.Refresh && !consent {
+	if len(p.Credentials) == 0 && !p.Login && !p.Refresh && !p.Overlay && !consent {
 		// With a consent grants file, a principal may hold consent grants only.
 		return fail("credentials is required")
 	}

@@ -50,7 +50,7 @@ func (l *Login) Run(ctx context.Context) (result error) {
 		return err
 	}
 	if l.Config.LoginGate != nil {
-		user, err := l.gate(ctx)
+		user, _, err := l.Config.LoginGate.SignIn(ctx, l.Client, l.Out, l.pollEvery)
 		if err != nil {
 			return err
 		}

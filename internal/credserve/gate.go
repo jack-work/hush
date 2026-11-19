@@ -35,6 +35,27 @@ type LoginGate struct {
 	Wait   string `toml:"wait"`
 
 	maxAge, wait time.Duration
+	// clock is time.Now and time.After; tests replace it.
+	clock gateClock
+}
+
+type gateClock struct {
+	now   func() time.Time
+	after func(time.Duration) <-chan time.Time
+}
+
+func (g *LoginGate) now() time.Time {
+	if g.clock.now != nil {
+		return g.clock.now()
+	}
+	return time.Now()
+}
+
+func (g *LoginGate) after(d time.Duration) <-chan time.Time {
+	if g.clock.after != nil {
+		return g.clock.after(d)
+	}
+	return time.After(d)
 }
 
 const gateSkew = 60 * time.Second
@@ -75,27 +96,27 @@ func durationOr(raw string, def time.Duration) (time.Duration, error) {
 
 func (g *LoginGate) egressURLs() []string { return []string{g.Issuer, g.Relay} }
 
-// gate signs the administrator in and returns their username, or refuses.
-func (l *Login) gate(ctx context.Context) (string, error) {
-	g := l.Config.LoginGate
-	d, err := oauth.Discover(ctx, l.Client, g.Issuer)
+// SignIn signs an administrator in and returns their username and access
+// token, or refuses. every is the relay poll interval (0: one second).
+func (g *LoginGate) SignIn(ctx context.Context, c *http.Client, out io.Writer, every time.Duration) (user, access string, err error) {
+	d, err := oauth.Discover(ctx, c, g.Issuer)
 	if err != nil {
-		return "", fmt.Errorf("login gate: %w", err)
+		return "", "", fmt.Errorf("login gate: %w", err)
 	}
 	if d.AuthorizationEndpoint == "" || d.UserinfoEndpoint == "" {
-		return "", errors.New("login gate: the provider names no authorization or userinfo endpoint")
+		return "", "", errors.New("login gate: the provider names no authorization or userinfo endpoint")
 	}
 	pkce, err := oauth.GeneratePKCE()
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	state, err := loginNonce()
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	nonce, err := loginNonce()
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	// prompt=login + max_age=0: a FRESH passkey check, not a reused session.
 	authorize := d.AuthorizationEndpoint + "?" + url.Values{
@@ -104,20 +125,36 @@ func (l *Login) gate(ctx context.Context) (string, error) {
 		"code_challenge": {pkce.Challenge}, "code_challenge_method": {"S256"},
 		"prompt": {"login"}, "max_age": {"0"},
 	}.Encode()
-	fmt.Fprintf(l.Out, "Sign in as a member of %s within %s:\n\n  %s\n\n", g.Group, g.wait, authorize)
+	fmt.Fprintf(out, "Sign in as a member of %s within %s:\n\n  %s\n\n", g.Group, g.wait, authorize)
 
-	code, err := l.relayCode(ctx, g, state)
+	code, err := g.relayCode(ctx, c, state, every)
+	if err != nil {
+		return "", "", fmt.Errorf("login gate: %w", err)
+	}
+	access, idToken, err := gateExchange(ctx, c, d.TokenEndpoint, g, code, pkce.Verifier)
+	if err != nil {
+		return "", "", fmt.Errorf("login gate: %w", err)
+	}
+	if err := g.checkIDToken(idToken, nonce, g.now()); err != nil {
+		return "", "", fmt.Errorf("login gate: %w", err)
+	}
+	if user, err = gateMember(ctx, c, d.UserinfoEndpoint, access, g.Group); err != nil {
+		return "", "", fmt.Errorf("login gate: %w", err)
+	}
+	return user, access, nil
+}
+
+// Member checks a bearer from SignIn: the provider still honours it and its
+// user is in Group. It returns the username.
+func (g *LoginGate) Member(ctx context.Context, c *http.Client, access string) (string, error) {
+	d, err := oauth.Discover(ctx, c, g.Issuer)
 	if err != nil {
 		return "", fmt.Errorf("login gate: %w", err)
 	}
-	access, idToken, err := gateExchange(ctx, l.Client, d.TokenEndpoint, g, code, pkce.Verifier)
-	if err != nil {
-		return "", fmt.Errorf("login gate: %w", err)
+	if d.UserinfoEndpoint == "" {
+		return "", errors.New("login gate: the provider names no userinfo endpoint")
 	}
-	if err := g.checkIDToken(idToken, nonce, time.Now()); err != nil {
-		return "", fmt.Errorf("login gate: %w", err)
-	}
-	user, err := gateMember(ctx, l.Client, d.UserinfoEndpoint, access, g.Group)
+	user, err := gateMember(ctx, c, d.UserinfoEndpoint, access, g.Group)
 	if err != nil {
 		return "", fmt.Errorf("login gate: %w", err)
 	}
@@ -127,15 +164,14 @@ func (l *Login) gate(ctx context.Context) (string, error) {
 // relayCode polls the relay until the sign-in's code arrives. 404 is pending
 // and 429 slow down; a 5xx or a transport error is the relay failing, retried
 // with backoff so the pending sign-in survives a relay restart.
-func (l *Login) relayCode(ctx context.Context, g *LoginGate, state string) (string, error) {
-	every := l.pollEvery
+func (g *LoginGate) relayCode(ctx context.Context, c *http.Client, state string, every time.Duration) (string, error) {
 	if every == 0 {
 		every = time.Second
 	}
 	backoff := every
-	deadline := time.Now().Add(g.wait)
-	for time.Now().Before(deadline) {
-		body, status, err := gateGet(ctx, l.Client, g.Relay+"?"+url.Values{"state": {state}}.Encode(), "")
+	deadline := g.now().Add(g.wait)
+	for g.now().Before(deadline) {
+		body, status, err := gateGet(ctx, c, g.Relay+"?"+url.Values{"state": {state}}.Encode(), "")
 		wait := every
 		switch {
 		case err != nil || status >= 500:
@@ -165,7 +201,7 @@ func (l *Login) relayCode(ctx context.Context, g *LoginGate, state string) (stri
 		select {
 		case <-ctx.Done():
 			return "", ctx.Err()
-		case <-time.After(min(wait, time.Until(deadline))):
+		case <-g.after(min(wait, deadline.Sub(g.now()))):
 		}
 	}
 	return "", errors.New("no sign-in arrived in time")

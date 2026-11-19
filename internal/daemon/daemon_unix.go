@@ -40,6 +40,7 @@ func Spawn(exe string, args, extraEnv []string, id io.WriterTo, opts Options) (i
 		pr.Close()
 		return 0, fmt.Errorf("start daemon: %w", err)
 	}
+	go child.Wait()
 	if place, ok := placeAgent(os.Getenv, ownManagerSocket, opts.Instance); ok {
 		if err := moveIntoScope(place, child.Process.Pid); err != nil && logf != nil {
 			fmt.Fprintf(logf, "hush: agent left in the spawner's cgroup, so it ends with the spawner's unit: %v\n", err)

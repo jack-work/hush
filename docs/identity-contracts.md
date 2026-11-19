@@ -23,7 +23,9 @@ A SPIFFE ID is `spiffe://<trust domain>/<path>`.
 
 A unit identity goes only to a caller whose uid is the only uid running in that unit's cgroup tree; a user that `su`s inside a root unit, or any process in a unit that mixes uids, gets its uid identity instead.
 
-Every workload identity sits under the node that issued it. A node's intermediate signs only its own subtree; a verifier refuses an SVID whose path is outside `/node/<issuer's node>/`.
+Every workload identity sits under the node that issued it. A node's intermediate signs only its own subtree, and a node's JWT key speaks only for its own subtree; hush's verifier refuses an SVID whose path is outside `/node/<issuer's node>/`. That scoping is enforced by hush's verifier (`svid`), not by the PKI: X.509 name constraints cannot constrain URI paths, so a stock SPIFFE verifier would accept a compromised node's SVID for another node. Verify with `svid` wherever the node matters.
+
+A unit identity is held by a uid: any process of that uid that can ptrace the unit (kernel.yama.ptrace_scope 0) can act as it. Run units that hold identities as their own uid (DynamicUser).
 
 ## 2. Keys and certificates
 
@@ -39,7 +41,7 @@ The root certificate is a function of the trust domain and the root key alone (s
 
 X.509-SVID leaves: exactly one URI SAN, not a CA, key usage digital signature only, `NotBefore` 5 minutes back for clock skew, `NotAfter` never past the issuer's. Keys: Ed25519 or ECDSA P-256.
 
-JWT-SVID: compact JWS, `alg` `ES256`, `typ` `JWT`, `kid` naming the signing key in the bundle. Claims `sub` (the SPIFFE ID), `aud` (one or more, never empty), `exp`, `iat`. Lifetime 5 minutes (at most 1 hour). A verifier refuses any other `alg`, a missing `kid`, an audience it is not in, and an expired token (no leeway beyond 30 seconds).
+JWT-SVID: compact JWS, `alg` `ES256`, `typ` `JWT`, `kid` `<node>:<key hash>` naming the signing key in the bundle and the node it speaks for. Claims `sub` (the SPIFFE ID, under `/node/<node>/`), `aud` (one or more, never empty), `exp`, `iat`. Signatures are low-s. Lifetime 5 minutes (at most 1 hour). A verifier refuses any other `alg`, a `kid` with no node or a `sub` outside it, a high-s signature, an audience it is not in, an expired token (no leeway beyond 30 seconds), an `exp` more than an hour out, and an `iat` in the future.
 
 SSH user certificate: OpenSSH user cert, key id the SPIFFE ID, principals as granted, `ValidAfter` 5 minutes back, lifetime 10 minutes (at most 24 hours), no extensions but `permit-pty`.
 
@@ -59,7 +61,7 @@ JSON, a JWK Set as in the SPIFFE bundle format:
 ```
 
 - `x509-svid` keys carry exactly one certificate, a CA: the troupe root. Intermediates travel in the SVID's chain, never in the bundle.
-- `jwt-svid` keys carry a `kid`, unique in the bundle.
+- `jwt-svid` keys carry a `kid` of the form `<node>:<key hash>`, unique in the bundle.
 - `spiffe_sequence` only grows. A client keeps the highest it has seen and refuses an older bundle.
 - Unknown `use` values are skipped, so a later key type is not a break.
 

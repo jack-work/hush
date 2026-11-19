@@ -8,6 +8,9 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"math/big"
+	"strings"
 	"time"
 
 	"github.com/jack-work/hush/spiffeid"
@@ -41,6 +44,9 @@ func IssueJWTSVID(key *ecdsa.PrivateKey, kid string, id spiffeid.ID, audience []
 	if id.IsZero() {
 		return "", time.Time{}, errors.New("jwt-svid: no subject")
 	}
+	if node, _, ok := strings.Cut(kid, ":"); !ok || !id.Under(node) {
+		return "", time.Time{}, fmt.Errorf("jwt-svid: key %q may not speak for %s", kid, id)
+	}
 	if len(audience) == 0 {
 		return "", time.Time{}, errors.New("jwt-svid: at least one audience")
 	}
@@ -65,17 +71,23 @@ func IssueJWTSVID(key *ecdsa.PrivateKey, kid string, id spiffeid.ID, audience []
 	if err != nil {
 		return "", time.Time{}, err
 	}
+	if n := key.Curve.Params().N; s.Cmp(new(big.Int).Rsh(n, 1)) > 0 {
+		s.Sub(n, s)
+	}
 	sig := make([]byte, 64)
 	r.FillBytes(sig[:32])
 	s.FillBytes(sig[32:])
 	return signing + "." + enc.EncodeToString(sig), time.Unix(exp.Unix(), 0), nil
 }
 
-func JWTKeyID(pub *ecdsa.PublicKey) (string, error) {
+func JWTKeyID(node string, pub *ecdsa.PublicKey) (string, error) {
+	if _, err := spiffeid.Node("x", node); err != nil {
+		return "", err
+	}
 	raw, err := pub.Bytes()
 	if err != nil {
 		return "", err
 	}
 	sum := sha256.Sum256(raw)
-	return base64.RawURLEncoding.EncodeToString(sum[:12]), nil
+	return node + ":" + base64.RawURLEncoding.EncodeToString(sum[:12]), nil
 }

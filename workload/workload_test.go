@@ -48,7 +48,7 @@ func authority(t *testing.T, node string, now time.Time) workload.Authority {
 		t.Fatal(err)
 	}
 	jk, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	kid, _ := ca.JWTKeyID(&jk.PublicKey)
+	kid, _ := ca.JWTKeyID(node, &jk.PublicKey)
 	return workload.Authority{
 		Intermediate: inter, IntermediateCert: ic, JWTKey: jk, JWTKeyID: kid,
 		Bundle: &bundle.Bundle{TrustDomain: "kelliher", Sequence: 1, X509Authorities: []*x509.Certificate{rc},

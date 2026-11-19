@@ -282,7 +282,7 @@ func loadAuthority(cmd *cobra.Command) (workload.Authority, string, string, erro
 		if !ok || ek.Curve != elliptic.P256() {
 			return workload.Authority{}, "", "", fmt.Errorf("%s: want an ECDSA P-256 key", p)
 		}
-		kid, err := ca.JWTKeyID(&ek.PublicKey)
+		kid, err := ca.JWTKeyID(v["node"], &ek.PublicKey)
 		if err != nil {
 			return workload.Authority{}, "", "", err
 		}

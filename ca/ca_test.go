@@ -12,6 +12,7 @@ import (
 	"encoding/hex"
 	"encoding/pem"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -241,7 +242,7 @@ func forgeLeaf(t *testing.T, key ed25519.PrivateKey, issuer *x509.Certificate, s
 
 func TestJWTSVIDRoundTripsAndVerifyRefuses(t *testing.T) {
 	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	kid, _ := ca.JWTKeyID(&key.PublicKey)
+	kid, _ := ca.JWTKeyID("spain", &key.PublicKey)
 	b := &bundle.Bundle{TrustDomain: "kelliher", JWTAuthorities: map[string]crypto.PublicKey{kid: &key.PublicKey}}
 	sid := id(t, "spiffe://kelliher/node/spain/figaro/abc")
 	tok, exp, err := ca.IssueJWTSVID(key, kid, sid, []string{"figaro-door", "spain"}, now, 0)
@@ -265,19 +266,23 @@ func TestJWTSVIDRoundTripsAndVerifyRefuses(t *testing.T) {
 		at   time.Time
 		want error
 	}{
-		"wrong audience":  {tok, "merlin", now, svid.ErrUntrusted},
-		"empty audience":  {tok, "", now, svid.ErrUntrusted},
-		"expired":         {tok, "spain", now.Add(ca.JWTTTL + svid.JWTLeeway), svid.ErrExpired},
-		"another key":     {strangerTok, "spain", now, svid.ErrUntrusted},
-		"another domain":  {otherTD, "spain", now, svid.ErrUntrusted},
-		"alg none":        {resign(t, key, tok, `{"alg":"none","kid":"`+kid+`"}`), "spain", now, svid.ErrUntrusted},
-		"alg HS256":       {resign(t, key, tok, `{"alg":"HS256","kid":"`+kid+`"}`), "spain", now, svid.ErrUntrusted},
-		"no kid":          {resign(t, key, tok, `{"alg":"ES256"}`), "spain", now, svid.ErrUntrusted},
-		"unknown kid":     {resign(t, key, tok, `{"alg":"ES256","kid":"nope"}`), "spain", now, svid.ErrUntrusted},
-		"critical header": {resign(t, key, tok, `{"alg":"ES256","kid":"`+kid+`","crit":["x"]}`), "spain", now, svid.ErrUntrusted},
-		"tampered claims": {tamper(t, tok), "spain", now, svid.ErrUntrusted},
-		"two parts":       {"a.b", "spain", now, svid.ErrUntrusted},
-		"empty":           {"", "spain", now, svid.ErrUntrusted},
+		"wrong audience":         {tok, "merlin", now, svid.ErrUntrusted},
+		"empty audience":         {tok, "", now, svid.ErrUntrusted},
+		"expired":                {tok, "spain", now.Add(ca.JWTTTL + svid.JWTLeeway), svid.ErrExpired},
+		"another key":            {strangerTok, "spain", now, svid.ErrUntrusted},
+		"another domain":         {otherTD, "spain", now, svid.ErrUntrusted},
+		"alg none":               {resign(t, key, tok, `{"alg":"none","kid":"`+kid+`"}`), "spain", now, svid.ErrUntrusted},
+		"alg HS256":              {resign(t, key, tok, `{"alg":"HS256","kid":"`+kid+`"}`), "spain", now, svid.ErrUntrusted},
+		"no kid":                 {resign(t, key, tok, `{"alg":"ES256"}`), "spain", now, svid.ErrUntrusted},
+		"unknown kid":            {resign(t, key, tok, `{"alg":"ES256","kid":"nope"}`), "spain", now, svid.ErrUntrusted},
+		"critical header":        {resign(t, key, tok, `{"alg":"ES256","kid":"`+kid+`","crit":["x"]}`), "spain", now, svid.ErrUntrusted},
+		"tampered claims":        {tamper(t, tok), "spain", now, svid.ErrUntrusted},
+		"another node's subject": {forgeJWT(t, key, kid, `{"sub":"spiffe://kelliher/node/merlin/unit/sshd.service","aud":["spain"],"exp":`+fmt.Sprint(now.Add(time.Minute).Unix())+`}`), "spain", now, svid.ErrUntrusted},
+		"high-s twin":            {highS(t, key, tok), "spain", now, svid.ErrUntrusted},
+		"lives past an hour":     {forgeJWT(t, key, kid, `{"sub":"spiffe://kelliher/node/spain/figaro/abc","aud":["spain"],"exp":`+fmt.Sprint(now.Add(2*time.Hour).Unix())+`}`), "spain", now, svid.ErrUntrusted},
+		"issued in the future":   {forgeJWT(t, key, kid, `{"sub":"spiffe://kelliher/node/spain/figaro/abc","aud":["spain"],"exp":`+fmt.Sprint(now.Add(time.Minute).Unix())+`,"iat":`+fmt.Sprint(now.Add(10*time.Minute).Unix())+`}`), "spain", now, svid.ErrUntrusted},
+		"two parts":              {"a.b", "spain", now, svid.ErrUntrusted},
+		"empty":                  {"", "spain", now, svid.ErrUntrusted},
 	}
 	for name, c := range cases {
 		if _, err := svid.VerifyJWT(c.tok, b, c.aud, c.at); !errors.Is(err, c.want) {
@@ -291,12 +296,17 @@ func TestJWTIssuanceRefuses(t *testing.T) {
 	p384, _ := ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
 	sid := id(t, "spiffe://kelliher/node/spain/uid/1")
 	for name, f := range map[string]func() error{
-		"p384":           func() error { _, _, e := ca.IssueJWTSVID(p384, "k", sid, []string{"a"}, now, 0); return e },
-		"nil key":        func() error { _, _, e := ca.IssueJWTSVID(nil, "k", sid, []string{"a"}, now, 0); return e },
+		"p384":           func() error { _, _, e := ca.IssueJWTSVID(p384, "spain:k", sid, []string{"a"}, now, 0); return e },
+		"nil key":        func() error { _, _, e := ca.IssueJWTSVID(nil, "spain:k", sid, []string{"a"}, now, 0); return e },
 		"no kid":         func() error { _, _, e := ca.IssueJWTSVID(key, "", sid, []string{"a"}, now, 0); return e },
-		"no audience":    func() error { _, _, e := ca.IssueJWTSVID(key, "k", sid, nil, now, 0); return e },
-		"empty audience": func() error { _, _, e := ca.IssueJWTSVID(key, "k", sid, []string{""}, now, 0); return e },
-		"no subject":     func() error { _, _, e := ca.IssueJWTSVID(key, "k", spiffeid.ID{}, []string{"a"}, now, 0); return e },
+		"no audience":    func() error { _, _, e := ca.IssueJWTSVID(key, "spain:k", sid, nil, now, 0); return e },
+		"empty audience": func() error { _, _, e := ca.IssueJWTSVID(key, "spain:k", sid, []string{""}, now, 0); return e },
+		"no subject": func() error {
+			_, _, e := ca.IssueJWTSVID(key, "spain:k", spiffeid.ID{}, []string{"a"}, now, 0)
+			return e
+		},
+		"unscoped kid": func() error { _, _, e := ca.IssueJWTSVID(key, "k", sid, []string{"a"}, now, 0); return e },
+		"another node": func() error { _, _, e := ca.IssueJWTSVID(key, "merlin:k", sid, []string{"a"}, now, 0); return e },
 	} {
 		if f() == nil {
 			t.Errorf("%s: issued", name)

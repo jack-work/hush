@@ -17,7 +17,10 @@ import (
 	"github.com/jack-work/hush/spiffeid"
 )
 
-const JWTLeeway = 30 * time.Second
+const (
+	JWTLeeway      = 30 * time.Second
+	MaxJWTLifetime = time.Hour
+)
 
 var (
 	ErrUntrusted = errors.New("svid: not trusted")
@@ -115,6 +118,7 @@ func VerifyJWT(token string, b *bundle.Bundle, audience string, now time.Time) (
 	if h.Kid == "" {
 		return JWT{}, fmt.Errorf("%w: no kid", ErrUntrusted)
 	}
+	node, _, scopedKid := strings.Cut(h.Kid, ":")
 	key, ok := b.JWTAuthorities[h.Kid].(*ecdsa.PublicKey)
 	if !ok {
 		return JWT{}, fmt.Errorf("%w: kid %q is not a P-256 authority of %s", ErrUntrusted, h.Kid, b.TrustDomain)
@@ -125,6 +129,9 @@ func VerifyJWT(token string, b *bundle.Bundle, audience string, now time.Time) (
 	}
 	sum := sha256.Sum256([]byte(parts[0] + "." + parts[1]))
 	r, s := new(big.Int).SetBytes(sig[:32]), new(big.Int).SetBytes(sig[32:])
+	if s.Cmp(new(big.Int).Rsh(key.Curve.Params().N, 1)) > 0 {
+		return JWT{}, fmt.Errorf("%w: a high-s signature", ErrUntrusted)
+	}
 	if !ecdsa.Verify(key, sum[:], r, s) {
 		return JWT{}, fmt.Errorf("%w: bad signature", ErrUntrusted)
 	}
@@ -132,6 +139,7 @@ func VerifyJWT(token string, b *bundle.Bundle, audience string, now time.Time) (
 		Sub string          `json:"sub"`
 		Aud json.RawMessage `json:"aud"`
 		Exp *int64          `json:"exp"`
+		Iat *int64          `json:"iat"`
 	}
 	if err := decode(parts[1], &c); err != nil {
 		return JWT{}, err
@@ -142,6 +150,9 @@ func VerifyJWT(token string, b *bundle.Bundle, audience string, now time.Time) (
 	}
 	if id.TrustDomain() != b.TrustDomain {
 		return JWT{}, fmt.Errorf("%w: %s is not in trust domain %s", ErrUntrusted, id, b.TrustDomain)
+	}
+	if !scopedKid || !id.Under(node) {
+		return JWT{}, fmt.Errorf("%w: key %q may not speak for %s", ErrUntrusted, h.Kid, id)
 	}
 	aud, err := audiences(c.Aud)
 	if err != nil {
@@ -156,6 +167,12 @@ func VerifyJWT(token string, b *bundle.Bundle, audience string, now time.Time) (
 	exp := time.Unix(*c.Exp, 0)
 	if !now.Before(exp.Add(JWTLeeway)) {
 		return JWT{}, fmt.Errorf("%w: at %s", ErrExpired, exp.Format(time.RFC3339))
+	}
+	if exp.After(now.Add(MaxJWTLifetime + JWTLeeway)) {
+		return JWT{}, fmt.Errorf("%w: lives past %s", ErrUntrusted, MaxJWTLifetime)
+	}
+	if c.Iat != nil && time.Unix(*c.Iat, 0).After(now.Add(JWTLeeway)) {
+		return JWT{}, fmt.Errorf("%w: issued in the future", ErrUntrusted)
 	}
 	return JWT{ID: id, Audience: aud, Expiry: exp}, nil
 }

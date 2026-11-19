@@ -28,7 +28,7 @@ func root(t *testing.T) *x509.Certificate {
 
 func TestABundleRoundTrips(t *testing.T) {
 	jwt, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	kid, _ := ca.JWTKeyID(&jwt.PublicKey)
+	kid, _ := ca.JWTKeyID("spain", &jwt.PublicKey)
 	in := &bundle.Bundle{TrustDomain: "kelliher", Sequence: 7, RefreshHint: 5 * time.Minute,
 		X509Authorities: []*x509.Certificate{root(t)}, JWTAuthorities: map[string]crypto.PublicKey{kid: &jwt.PublicKey}}
 	raw, err := in.Marshal()

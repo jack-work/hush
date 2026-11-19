@@ -33,7 +33,7 @@ func TestGoSpiffeAcceptsWhatHushIssues(t *testing.T) {
 		t.Fatal(err)
 	}
 	jwtKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	kid, _ := ca.JWTKeyID(&jwtKey.PublicKey)
+	kid, _ := ca.JWTKeyID("spain", &jwtKey.PublicKey)
 	raw, err := (&bundle.Bundle{TrustDomain: "kelliher", Sequence: 1, X509Authorities: []*x509.Certificate{rc},
 		JWTAuthorities: map[string]crypto.PublicKey{kid: &jwtKey.PublicKey}}).Marshal()
 	if err != nil {

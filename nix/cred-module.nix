@@ -177,6 +177,24 @@ let
       default = "${L.runDir}/systemd.sock";
       description = "The LoadCredential socket (0600 ${L.user}; systemd connects as root).";
     };
+
+    overlayAdminUsers = mkOption {
+      type = types.listOf types.str;
+      default = [ ];
+      example = [ "alice" ];
+      description = ''
+        Users who may WRITE the runtime overlay (POST/DELETE /v1/grants and /v1/suspensions) on the overlay admin socket
+        (root-owned 0600, one ACL entry per user; the server checks SO_PEERCRED again). No other socket writes the
+        overlay. Empty: no admin socket, and the overlay can only be read.
+      '';
+    };
+
+    overlayAdminSocketPath = mkOption {
+      type = types.str;
+      readOnly = true;
+      default = "${L.runDir}/overlay-admin.sock";
+      description = "The overlay admin socket.";
+    };
   };
 
   hushCfg = config.services.hush;
@@ -239,6 +257,8 @@ let
       systemd = { socket = cfg.systemdSocketPath; units = cfg.unitGrants; };
     } // lib.optionalAttrs (cfg.consentGrants != null) {
       consent_grants = cfg.consentGrants;
+    } // lib.optionalAttrs (cfg.overlayAdminUsers != [ ]) {
+      overlay_admin = { socket = cfg.overlayAdminSocketPath; users = cfg.overlayAdminUsers; };
     });
 
     setfacl = "${pkgs.acl}/bin/setfacl";
@@ -290,9 +310,26 @@ let
         RemoveOnStop = true;
       };
     }; };
-    socketUnits = lib.attrNames ownerSocket ++ lib.attrNames principalSockets ++ lib.attrNames systemdSocket;
+    overlayAdminSocket = lib.optionalAttrs (cfg.overlayAdminUsers != [ ]) { ${L.socketUnit "overlay-admin"} = {
+      wantedBy = [ "sockets.target" ];
+      listenStreams = [ cfg.overlayAdminSocketPath ];
+      socketConfig = {
+        Service = "${L.service}.service";
+        FileDescriptorName = "overlay-admin";
+        SocketUser = "root";
+        SocketGroup = "root";
+        SocketMode = "0600";
+        DirectoryMode = "0755";
+        ExecStartPost = map (u: "${setfacl} -m u:${u}:rw ${cfg.overlayAdminSocketPath}") cfg.overlayAdminUsers;
+      } // lib.optionalAttrs L.rebindSockets {
+        RemoveOnStop = true;
+      };
+    }; };
+    socketUnits = lib.attrNames ownerSocket ++ lib.attrNames principalSockets ++ lib.attrNames systemdSocket
+      ++ lib.attrNames overlayAdminSocket;
     allSocketPaths = lib.optional (owner != null) owner.path ++ map (p: p.socketPath) (lib.attrValues principals)
-      ++ lib.optional (cfg.unitGrants != { }) cfg.systemdSocketPath;
+      ++ lib.optional (cfg.unitGrants != { }) cfg.systemdSocketPath
+      ++ lib.optional (cfg.overlayAdminUsers != [ ]) cfg.overlayAdminSocketPath;
 
     pinnedTokenUrl = {
       chatgpt = "https://auth.openai.com/oauth/token";
@@ -398,7 +435,7 @@ let
       };
     };
 
-    systemd.sockets = principalSockets // ownerSocket // systemdSocket;
+    systemd.sockets = principalSockets // ownerSocket // systemdSocket // overlayAdminSocket;
 
     systemd.services.${L.service} = let
       sockets = map (u: "${u}.socket") socketUnits;

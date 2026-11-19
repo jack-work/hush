@@ -47,9 +47,11 @@ type Server struct {
 	staleLoaded bool
 	overlay     overlayStore
 	overlayFile string
-	connMu      sync.Mutex
-	connections sync.WaitGroup
-	conns       map[net.Conn]bool
+	// overlayAdmins are the uids the overlay admin socket serves.
+	overlayAdmins map[uint32]bool
+	connMu        sync.Mutex
+	connections   sync.WaitGroup
+	conns         map[net.Conn]bool
 }
 
 type cell struct {
@@ -114,6 +116,10 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			}()
 		}
 	}
+	if principal == OverlayAdminFDName {
+		s.serveOverlayAdmin(w, r)
+		return
+	}
 	if principal != "" {
 		s.servePrincipal(w, r, principal)
 		return
@@ -131,7 +137,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if s.loginRoute(w, r) {
 		return
 	}
-	if s.overlayRoute(w, r, true, "owner") {
+	if s.overlayRoute(w, r, false, true, "owner") {
 		return
 	}
 	if r.URL.Path == "/status" {

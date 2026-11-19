@@ -17,9 +17,13 @@ import (
 	"github.com/jack-work/hush/policy"
 )
 
-// front reads the overlay, rou2 reads credentials only; the allow_user socket
-// ("legacy") is the owner, the only writer.
+// front reads the overlay, rou2 reads credentials only, the allow_user socket
+// ("legacy") reads it too; only the overlay admin socket ("admin") writes.
 const overlayPrincipals = `
+[overlay_admin]
+socket = "/run/hush-test/overlay-admin.sock"
+users = ["me"]
+
 [principals.front]
 users = ["me"]
 overlay = true
@@ -42,16 +46,20 @@ func (c *testClock) set(t time.Time) { c.mu.Lock(); c.t = t; c.mu.Unlock() }
 var t0 = time.Now().UTC().Truncate(time.Second)
 
 // newOverlayRig serves overlayPrincipals on clock, the overlay persisted in
-// the rig's state dir; before runs once the overlay is loaded.
-func newOverlayRig(t *testing.T, before ...func(*rig)) (*prig, *testClock, string) {
+// the rig's state dir and admin the overlay admin socket's one uid.
+func newOverlayRig(t *testing.T, admin ...uint32) (*prig, *testClock, string) {
 	t.Helper()
 	clock := &testClock{t: t0}
 	var file string
-	p := newPrincipalRig(t, "me", overlayPrincipals, append([]func(*rig){func(r *rig) {
+	if len(admin) == 0 {
+		admin = []uint32{uint32(os.Getuid())}
+	}
+	p := newPrincipalRig(t, "me", overlayPrincipals, func(r *rig) {
 		r.srv.Now = clock.now
 		file = filepath.Join(r.stateDir, "overlay.json")
 		r.srv.SetOverlayFile(file)
-	}}, before...)...)
+		r.srv.SetOverlayAdmins(map[uint32]bool{admin[0]: true})
+	})
 	return p, clock, file
 }
 
@@ -78,7 +86,7 @@ func readOverlay(t *testing.T, p *prig) policy.Overlay {
 
 func create(t *testing.T, p *prig, path, body string) policy.Entry {
 	t.Helper()
-	a := p.call("legacy", http.MethodPost, path, body, nil)
+	a := p.call("admin", http.MethodPost, path, body, nil)
 	var e policy.Entry
 	if a.status != 201 || json.Unmarshal([]byte(a.raw), &e) != nil {
 		t.Fatalf("create on %s: %d %q", path, a.status, a.raw)
@@ -91,18 +99,22 @@ func TestOverlayAccessBySocket(t *testing.T) {
 		socket, method, path, body string
 		status, stored             int
 	}{
-		{"legacy", http.MethodPost, grantsPath, oneHour, 201, 1},
-		{"legacy", http.MethodPost, suspensionsPath, oneHour, 201, 1},
+		{"admin", http.MethodPost, grantsPath, oneHour, 201, 1},
+		{"admin", http.MethodPost, suspensionsPath, oneHour, 201, 1},
+		{"admin", http.MethodGet, overlayReadPath, "", 200, 0},
+		{"admin", http.MethodGet, "/cred/" + instName, "", 404, 0},
+		{"admin", http.MethodPut, grantsPath, oneHour, 405, 0},
+		{"admin", http.MethodPost, overlayReadPath, oneHour, 405, 0},
+		{"admin", http.MethodDelete, grantsPath + "/0123456789abcdef", "", 404, 0},
 		{"legacy", http.MethodGet, overlayReadPath, "", 200, 0},
+		{"legacy", http.MethodPost, grantsPath, oneHour, 403, 0},
+		{"legacy", http.MethodPost, suspensionsPath, oneHour, 403, 0},
 		{"front", http.MethodGet, overlayReadPath, "", 200, 0},
 		{"front", http.MethodPost, grantsPath, oneHour, 403, 0},
 		{"front", http.MethodPost, suspensionsPath, oneHour, 403, 0},
 		{"front", http.MethodDelete, suspensionsPath + "/0123456789abcdef", "", 403, 0},
-		{"rou2", http.MethodGet, overlayReadPath, "", 404, 0},
-		{"rou2", http.MethodPost, grantsPath, oneHour, 404, 0},
-		{"legacy", http.MethodPut, grantsPath, oneHour, 405, 0},
-		{"legacy", http.MethodPost, overlayReadPath, oneHour, 405, 0},
-		{"legacy", http.MethodDelete, grantsPath + "/0123456789abcdef", "", 404, 0},
+		{"rou2", http.MethodGet, overlayReadPath, "", 403, 0},
+		{"rou2", http.MethodPost, grantsPath, oneHour, 403, 0},
 	} {
 		t.Run(fmt.Sprintf("%s %s %s", c.socket, c.method, c.path), func(t *testing.T) {
 			p, _, _ := newOverlayRig(t)
@@ -136,7 +148,7 @@ func TestOverlayRefusesBadEntries(t *testing.T) {
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			p, _, _ := newOverlayRig(t)
-			if a := p.call("legacy", http.MethodPost, c.path, c.body, nil); a.status != 400 {
+			if a := p.call("admin", http.MethodPost, c.path, c.body, nil); a.status != 400 {
 				t.Fatalf("got %d %q, want 400", a.status, a.raw)
 			}
 			if o := readOverlay(t, p); len(o.Grants)+len(o.Suspensions) != 0 {
@@ -153,7 +165,7 @@ func TestOverlayCapsGrantsPerSubject(t *testing.T) {
 	for i := 0; i < overlayMaxGrantsPerSub; i++ {
 		create(t, p, grantsPath, entryBody("keel", fmt.Sprintf("grant-s%d", i), t0.Add(time.Hour), "r"))
 	}
-	if a := p.call("legacy", http.MethodPost, grantsPath, oneHour, nil); a.status != 409 || a.Error != "overlay_full" {
+	if a := p.call("admin", http.MethodPost, grantsPath, oneHour, nil); a.status != 409 || a.Error != "overlay_full" {
 		t.Fatalf("over the cap: %d %q, want 409 overlay_full", a.status, a.raw)
 	}
 	create(t, p, grantsPath, entryBody("rou2", "grant-ghe", t0.Add(time.Hour), "r"))
@@ -203,14 +215,14 @@ func TestOverlayRevokeAndLift(t *testing.T) {
 		{grantsPath + "/" + g.ID, 404},
 		{suspensionsPath + "/" + s.ID, 204},
 	} {
-		if a := p.request("legacy", http.MethodDelete, c.path); a.status != c.status {
+		if a := p.request("admin", http.MethodDelete, c.path); a.status != c.status {
 			t.Fatalf("DELETE %s: %d %q, want %d", c.path, a.status, a.raw, c.status)
 		}
 	}
 	if o := readOverlay(t, p); len(o.Grants)+len(o.Suspensions) != 0 {
 		t.Fatalf("left: %+v", o)
 	}
-	for _, line := range []string{g.ID + " revoked subject=keel grant=grant-ghe by=owner", s.ID + " lifted subject=keel grant=* by=owner"} {
+	for _, line := range []string{g.ID + " revoked subject=keel grant=grant-ghe by=admin:", s.ID + " lifted subject=keel grant=* by=admin:"} {
 		if !strings.Contains(p.logs.String(), line) {
 			t.Fatalf("no audit line %q:\n%s", line, p.logs.String())
 		}
@@ -273,5 +285,26 @@ func TestCredAuditCarriesAuthzHeaders(t *testing.T) {
 				t.Fatalf("audit line wrong (want %q, no token, no forged line):\n%s", c.want, logs)
 			}
 		})
+	}
+}
+
+// The admin socket serves only its listed uids: any other peer is refused
+// before routing, and nothing is stored.
+func TestOverlayAdminSocketRefusesOtherUIDs(t *testing.T) {
+	p, _, _ := newOverlayRig(t, otherUID)
+	for _, c := range []struct{ method, path, body string }{
+		{http.MethodPost, grantsPath, oneHour},
+		{http.MethodPost, suspensionsPath, oneHour},
+		{http.MethodGet, overlayReadPath, ""},
+	} {
+		if a := p.call("admin", c.method, c.path, c.body, nil); a.status != 403 {
+			t.Fatalf("%s %s from a non-admin uid: %d %q", c.method, c.path, a.status, a.raw)
+		}
+	}
+	if o := readOverlay(t, p); len(o.Grants)+len(o.Suspensions) != 0 {
+		t.Fatalf("stored: %+v", o)
+	}
+	if !strings.Contains(p.logs.String(), "refused peer uid") {
+		t.Fatalf("no refusal line:\n%s", p.logs.String())
 	}
 }

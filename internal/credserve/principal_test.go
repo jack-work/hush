@@ -131,6 +131,9 @@ func newPrincipalRig(t *testing.T, allow, extra string, before ...func(*rig)) *p
 		name := name
 		listen(name, func(ln net.Listener) net.Listener { return PrincipalListener(ln, name) })
 	}
+	if r.cfg.OverlayAdmin != nil {
+		listen("admin", func(ln net.Listener) net.Listener { return PrincipalListener(ln, OverlayAdminFDName) })
+	}
 	listen("legacy", func(ln net.Listener) net.Listener { return ln })
 	return p
 }

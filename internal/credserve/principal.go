@@ -97,7 +97,7 @@ func (s *Server) servePrincipal(w http.ResponseWriter, r *http.Request, name str
 	if p.Refresh && s.refreshRoute(w, r) {
 		return
 	}
-	if p.Overlay && s.overlayRoute(w, r, false, name) {
+	if s.overlayRoute(w, r, false, p.Overlay, name) {
 		return
 	}
 	cred, found := strings.CutPrefix(r.URL.Path, "/cred/")

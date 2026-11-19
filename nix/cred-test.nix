@@ -67,7 +67,9 @@ pkgs.testers.runNixOSTest {
       };
       instances.chatgpt-personal.kind = "chatgpt";
       # A principal with its own socket: outsider may read anthropic-work there and nothing else.
-      principals.keel = { users = [ "outsider" ]; credentials = [ "anthropic-work" ]; };
+      principals.keel = { users = [ "outsider" ]; credentials = [ "anthropic-work" ]; overlay = true; };
+      # The overlay is written only on its admin socket, by jack.
+      overlayAdminUsers = [ "jack" ];
       # LoadCredential: lc-granted may read anthropic-work as "token" and nothing else; lc-ungranted has no grant.
       unitGrants."lc-granted.service".token = "anthropic-work";
     };
@@ -115,9 +117,9 @@ pkgs.testers.runNixOSTest {
     def sign_in(expires_in, *args):
         # login refuses while `cred serve` owns the state (.credential-owner.lock): stop the owner first, as an operator would.
         fake("login_expires_in", expires_in)
-        minter.succeed("systemctl stop hush-cred.socket hush-drop.socket hush-admin.socket hush-keel.socket hush-loadcredential.socket hush.service")
+        minter.succeed("systemctl stop hush-cred.socket hush-drop.socket hush-admin.socket hush-keel.socket hush-loadcredential.socket hush-overlay-admin.socket hush.service")
         print(minter.succeed("${pkgs.python3}/bin/python3 ${ptyLogin} hush " + " ".join(args)))
-        minter.succeed("systemctl start hush-cred.socket hush-drop.socket hush-admin.socket hush-keel.socket hush-loadcredential.socket")
+        minter.succeed("systemctl start hush-cred.socket hush-drop.socket hush-admin.socket hush-keel.socket hush-loadcredential.socket hush-overlay-admin.socket")
 
     start_all()
     endpoint.wait_for_unit("fake-endpoint.service")
@@ -308,6 +310,26 @@ pkgs.testers.runNixOSTest {
         listing = minter.succeed("restic -r /srv/restic --password-file /etc/restic-pw ls latest")
         assert "/var/lib/backup-control/present" in listing, "CONTROL: the backup missed /var/lib"
         assert "/var/lib/hush" not in listing, "the minter's state was backed up"
+
+    with subtest("overlay: written on the admin socket only, read by an overlay principal"):
+        minter.succeed("test \"$(stat -c '%U' /run/hush/overlay-admin.sock)\" = 'root'")
+        acl = minter.succeed("getfacl -p /run/hush/overlay-admin.sock").splitlines()
+        for line in ["user::rw-", "user:jack:rw-", "group::---", "other::---"]:
+            assert line in acl, acl
+        until = int(minter.succeed("date +%s")) + 3600
+        stamp = minter.succeed(f"date -u -d @{until} +%Y-%m-%dT%H:%M:%SZ").strip()
+        grant = json.dumps({"subject": "keel", "grant": "grant-ghe", "expires_at": stamp, "reason": "vm"})
+        status, doc = call("jack", "overlay-admin", "POST", "/v1/suspensions", grant)
+        assert status == 201 and doc["approved_by"].startswith("admin:"), doc
+        # Refused: the owner (allow_user) socket and a principal socket never write.
+        assert call("hush", "admin", "POST", "/v1/grants", grant)[0] == 403
+        assert call("outsider", "keel", "POST", "/v1/grants", grant)[0] == 403
+        # Nobody else reaches the admin socket at all (root-owned 0600, ACL for jack only).
+        minter.fail("runuser -u figaro -- curl -sf --unix-socket /run/hush/overlay-admin.sock http://m/v1/overlay")
+        status, doc = call("outsider", "keel", "GET", "/v1/overlay")
+        assert status == 200 and [s["grant"] for s in doc["suspensions"]] == ["grant-ghe"] and doc["grants"] == [], doc
+        journal = minter.succeed("journalctl -u hush.service -o cat --no-pager")
+        assert " suspended subject=keel grant=grant-ghe " in journal, journal
 
     with subtest("LoadCredential socket: a granted unit gets the raw token; anything else gets nothing"):
         # Last, on a fresh hour-long sign-in.

@@ -12,6 +12,7 @@ import (
 	"os"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -20,9 +21,10 @@ import (
 
 // The runtime overlay: hush is the ONE store of temporary grants and
 // suspensions (package policy says how a gateway combines them with standing
-// access). Writes come only from the owner socket; a principal with
-// overlay = true reads the live overlay. Every create, revoke, lift and expiry
-// is one audit line; an entry never names a secret.
+// access). Writes come only from the overlay admin socket, for its listed uids;
+// the owner socket and principals with overlay = true read the live overlay.
+// Every create, revoke, lift and expiry is one audit line; an entry never names
+// a secret.
 
 const (
 	overlayMaxTTL          = 30 * 24 * time.Hour
@@ -50,6 +52,33 @@ var (
 	grantKind      = overlayKind{path: grantsPath, created: "granted", removed: "revoked", expires: true}
 	suspensionKind = overlayKind{path: suspensionsPath, created: "suspended", removed: "lifted", wildcard: true}
 )
+
+// OverlayAdminFDName is the socket-activation name of the overlay admin socket;
+// no principal may take it.
+const OverlayAdminFDName = "overlay-admin"
+
+// OverlayAdmin is the one socket that writes the overlay: Users (resolved to
+// uids) may POST and DELETE; anything else on it is refused.
+type OverlayAdmin struct {
+	Socket string   `toml:"socket"`
+	Users  []string `toml:"users"`
+}
+
+// SetOverlayAdmins installs the uids the overlay admin socket serves.
+func (s *Server) SetOverlayAdmins(uids map[uint32]bool) { s.overlayAdmins = uids }
+
+// serveOverlayAdmin serves a connection on the overlay admin socket.
+func (s *Server) serveOverlayAdmin(w http.ResponseWriter, r *http.Request) {
+	uid, ok := r.Context().Value(peerKey{}).(uint32)
+	if !ok || !s.overlayAdmins[uid] {
+		s.logger.Printf("cred: refused peer uid %d on the overlay admin socket", uid)
+		writeError(w, http.StatusForbidden, "forbidden", "peer not allowed")
+		return
+	}
+	if !s.overlayRoute(w, r, true, true, "admin:"+strconv.FormatUint(uint64(uid), 10)) {
+		writeError(w, http.StatusNotFound, "not_found", "the overlay admin socket serves the overlay only")
+	}
+}
 
 type overlayStore struct {
 	Sequence    uint64                  `json:"sequence"`
@@ -141,10 +170,14 @@ func (s *Server) changedOverlayLocked() {
 	}
 }
 
-// overlayRoute serves the overlay routes to who; owner says whether it may
-// write. false when the path is not an overlay route.
-func (s *Server) overlayRoute(w http.ResponseWriter, r *http.Request, owner bool, who string) bool {
+// overlayRoute serves the overlay routes to who: admin may write, read may
+// GET. false when the path is not an overlay route.
+func (s *Server) overlayRoute(w http.ResponseWriter, r *http.Request, admin, read bool, who string) bool {
 	if r.URL.Path == overlayReadPath {
+		if !read {
+			writeError(w, http.StatusForbidden, "forbidden", "this socket does not read the overlay")
+			return true
+		}
 		if r.Method != http.MethodGet {
 			writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "GET only")
 			return true
@@ -158,9 +191,9 @@ func (s *Server) overlayRoute(w http.ResponseWriter, r *http.Request, owner bool
 			continue
 		}
 		switch {
-		case !owner:
-			s.logger.Printf("cred: REFUSED overlay %s %s by %s: owner socket only", r.Method, k.path, who)
-			writeError(w, http.StatusForbidden, "forbidden", "the overlay is written on the owner socket only")
+		case !admin:
+			s.logger.Printf("cred: REFUSED overlay %s %s by %s: admin socket only", r.Method, k.path, who)
+			writeError(w, http.StatusForbidden, "forbidden", "the overlay is written on the overlay admin socket only")
 		case !isItem && r.Method == http.MethodPost:
 			s.createOverlay(w, r, k, who)
 		case isItem && r.Method == http.MethodDelete:

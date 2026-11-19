@@ -128,6 +128,17 @@ func runCredServe(cmd *cobra.Command, _ []string) (result error) {
 	srv.SetPrincipals(principals, conf.AllowUser != "")
 	srv.SetStaleFile(filepath.Join(stateDir, "stale.json"))
 	srv.SetOverlayFile(filepath.Join(stateDir, "overlay.json"))
+	if a := conf.OverlayAdmin; a != nil {
+		admins := map[uint32]bool{}
+		for _, u := range a.Users {
+			id, err := lookupUID(u)
+			if err != nil {
+				return fmt.Errorf("overlay_admin: %w", err)
+			}
+			admins[id] = true
+		}
+		srv.SetOverlayAdmins(admins)
+	}
 	ctx, stop := signal.NotifyContext(cmd.Context(), syscall.SIGTERM, syscall.SIGINT)
 	defer stop()
 	go srv.RunOverlaySweep(ctx, time.Minute)
@@ -203,7 +214,7 @@ func credListener(path string) (net.Listener, error) {
 // FileDescriptorName; the one descriptor not named for a principal is the
 // allow_user socket.
 func credListeners(conf *credserve.Config, legacyPath string) ([]net.Listener, net.Listener, error) {
-	if len(conf.Principals) == 0 && conf.Systemd == nil {
+	if len(conf.Principals) == 0 && conf.Systemd == nil && conf.OverlayAdmin == nil {
 		ln, err := credListener(legacyPath)
 		if err != nil {
 			return nil, nil, err
@@ -240,6 +251,20 @@ func credListeners(conf *credserve.Config, legacyPath string) ([]net.Listener, n
 				return fail(fmt.Errorf("systemd socket: %w", err))
 			}
 		}
+	}
+	if a := conf.OverlayAdmin; a != nil {
+		ln := inherited[credserve.OverlayAdminFDName]
+		delete(inherited, credserve.OverlayAdminFDName)
+		if ln == nil {
+			if ln, err = bindSocket(a.Socket); err != nil {
+				return fail(fmt.Errorf("overlay admin socket: %w", err))
+			}
+			// Unactivated, only the owner and root connect; the module adds one ACL entry per admin user.
+			if err := os.Chmod(a.Socket, 0o600); err != nil {
+				return fail(fmt.Errorf("overlay admin socket: %w", err))
+			}
+		}
+		out = append(out, credserve.PrincipalListener(ln, credserve.OverlayAdminFDName))
 	}
 	for name, p := range conf.Principals {
 		ln := inherited[name]

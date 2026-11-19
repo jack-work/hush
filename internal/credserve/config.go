@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 
@@ -70,6 +71,9 @@ type Config struct {
 	// a live row grants that credential to that principal beside the
 	// config's own grants. Empty: no consent grants.
 	ConsentGrants string `toml:"consent_grants"`
+	// OverlayAdmin, when set, adds the socket that writes the runtime overlay
+	// (temporary grants and suspensions). No other socket writes it.
+	OverlayAdmin *OverlayAdmin `toml:"overlay_admin"`
 
 	recipient age.Recipient
 }
@@ -132,6 +136,9 @@ func ParseConfig(data []byte) (*Config, error) {
 			return nil, err
 		}
 	}
+	if a := c.OverlayAdmin; a != nil && (len(a.Users) == 0 || slices.Contains(a.Users, "") || !filepath.IsAbs(a.Socket)) {
+		return nil, errors.New("cred config: overlay_admin needs users and an absolute socket path")
+	}
 	return &c, nil
 }
 
@@ -142,7 +149,7 @@ func (p Principal) validate(name string, instances map[string]Instance, consent 
 	if !instanceNameRE.MatchString(name) {
 		return fmt.Errorf("cred config: principal name %q must match %s", name, instanceNameRE)
 	}
-	if name == SystemdFDName {
+	if name == SystemdFDName || name == OverlayAdminFDName {
 		return fail("the name is reserved for the systemd LoadCredential socket")
 	}
 	if len(p.Users) == 0 {

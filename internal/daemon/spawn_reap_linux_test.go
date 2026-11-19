@@ -35,3 +35,22 @@ func TestSpawnedAgentIsReapedWhenItExits(t *testing.T) {
 		time.Sleep(20 * time.Millisecond)
 	}
 }
+
+// hush#37: the agent was reaped before it was moved into its scope, so the
+// pid handed to systemd could already name another process.
+func TestSpawnedAgentIsNotReapedBeforeItsScopeMove(t *testing.T) {
+	t.Setenv(noScopeEnv, "1")
+	moved := make(chan error, 1)
+	was := scopeAgent
+	t.Cleanup(func() { scopeAgent = was })
+	scopeAgent = func(pid int, _ string) error {
+		time.Sleep(200 * time.Millisecond)
+		_, err := os.Stat("/proc/" + strconv.Itoa(pid))
+		moved <- err
+		return nil
+	}
+	_, _ = Spawn("/bin/true", nil, nil, bytes.NewReader([]byte("id")), Options{Instance: "test"})
+	if err := <-moved; err != nil {
+		t.Fatalf("the agent was reaped before its scope move: %v", err)
+	}
+}

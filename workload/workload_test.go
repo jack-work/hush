@@ -322,7 +322,7 @@ func TestParseCreds(t *testing.T) {
 		{"a whitespace audience", []string{"a= "}, nil, `cred "a= ": want name=aud[,aud]`},
 		{"a name with a slash (not one path segment)", []string{"a/b=x"}, nil, `cred "a/b=x": want name=aud[,aud]`},
 		{"a name with a space", []string{"a b=x"}, nil, `cred "a b=x": want name=aud[,aud]`},
-		{"a unicode name", []string{"caf\u00e9=x"}, nil, `cred "caf\u00e9=x": want name=aud[,aud]`},
+		{"a unicode name", []string{"caf\u00e9=x"}, nil, "cred \"caf\u00e9=x\": want name=aud[,aud]"},
 		{"a name given twice", []string{"a=x", "a=y"}, nil, "cred a given twice"},
 	}
 	for _, c := range cases {

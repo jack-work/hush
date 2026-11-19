@@ -112,6 +112,13 @@ pkgs.testers.runNixOSTest {
     def count(name):
         return int(endpoint.succeed(f"cat /run/fake/{name} 2>/dev/null || echo 0").strip())
 
+    def sign_in(expires_in, *args):
+        # login refuses while `cred serve` owns the state (.credential-owner.lock): stop the owner first, as an operator would.
+        fake("login_expires_in", expires_in)
+        minter.succeed("systemctl stop hush-cred.socket hush-drop.socket hush-admin.socket hush-keel.socket hush-loadcredential.socket hush.service")
+        print(minter.succeed("${pkgs.python3}/bin/python3 ${ptyLogin} hush " + " ".join(args)))
+        minter.succeed("systemctl start hush-cred.socket hush-drop.socket hush-admin.socket hush-keel.socket hush-loadcredential.socket")
+
     start_all()
     endpoint.wait_for_unit("fake-endpoint.service")
     endpoint.wait_for_unit("dnsmasq.service")
@@ -152,11 +159,8 @@ pkgs.testers.runNixOSTest {
         assert count("logins") == 0
 
     with subtest("(v) login reads code#state from the terminal"):
-        fake("login_expires_in", 35)
-        # login refuses while `cred serve` owns the state (.credential-owner.lock): stop the owner first, as an operator would.
-        minter.succeed("systemctl stop hush-cred.socket hush-drop.socket hush-admin.socket hush-keel.socket hush-loadcredential.socket hush.service")
-        print(minter.succeed("${pkgs.python3}/bin/python3 ${ptyLogin} hush"))
-        minter.succeed("systemctl start hush-cred.socket hush-drop.socket hush-admin.socket hush-keel.socket hush-loadcredential.socket")
+        # An hour-long token: nothing below refreshes it until a subtest asks for that (wait on state, not time).
+        sign_in(3600)
         assert count("logins") == 1
         status, doc = cred("figaro", 200)
         assert doc["token"] == "at-login-1", doc
@@ -186,6 +190,15 @@ pkgs.testers.runNixOSTest {
         body, status = out.rsplit("\n", 1)
         replies.append(body)
         return int(status), json.loads(body)
+
+    def wait_due():
+        # A GET refreshes once fewer than 30 s (the serve floor) remain; /status itself never refreshes.
+        for _ in range(120):
+            status, doc = call("hush", "admin", "GET", "/status")
+            if doc["anthropic-work"]["expires_at"] - int(minter.succeed("date +%s")) < 30:
+                return
+            time.sleep(0.5)
+        raise AssertionError(f"anthropic-work never came due: {doc}")
 
     with subtest("cred socket: figaro's uid only; groups and other uids are refused"):
         status, doc = cred("figaro", 200)
@@ -225,8 +238,7 @@ pkgs.testers.runNixOSTest {
     with subtest("admin socket: the hush uid reads status; nobody else"):
         status, doc = call("hush", "admin", "GET", "/status")
         assert status == 200, doc
-        # The 35 s sign-in token is inside the serve floor by now, and /status never refreshes: "failing" is the honest state.
-        assert doc["anthropic-work"]["state"] in ("ok", "failing") and doc["anthropic-work"]["expires_at"] > 0, doc
+        assert doc["anthropic-work"]["state"] == "ok" and doc["anthropic-work"]["expires_at"] > 0, doc
         assert doc["chatgpt-personal"]["state"] == "unminted", doc
         # No token value and no token field; the word itself may appear in a failing reason ("token expired ...").
         assert "at-login-1" not in json.dumps(doc) and all("token" not in e for e in doc.values()), doc
@@ -236,9 +248,11 @@ pkgs.testers.runNixOSTest {
         assert status == 403, doc
 
     with subtest("(ii) N concurrent calls during a refresh cost one POST"):
+        # A 35 s sign-in comes due within 5 s (fewer than 30 s left); the background renewal waits at least a minute.
+        sign_in(35, "--replace")
+        wait_due()
         fake("mode", "slow")
         fake("expires_in", 45)
-        time.sleep(6)
         minter.succeed(
             "for i in $(seq 20); do runuser -u figaro -- curl -s --unix-socket /run/hush/cred.sock "
             "http://m/cred/anthropic-work > /tmp/r$i & done; wait"
@@ -251,7 +265,8 @@ pkgs.testers.runNixOSTest {
 
     with subtest("(ii) repeated calls cannot storm the endpoint"):
         fake("mode", "ok")
-        time.sleep(16)
+        # Due again (at-1 lives 45 s) while the last refresh is under 30 s old: every call is paced.
+        wait_due()
         for _ in range(20):
             cred("figaro")
         assert count("posts") == 1, count("posts")
@@ -272,7 +287,7 @@ pkgs.testers.runNixOSTest {
         assert "at-killed" not in minter.succeed("cat /tmp/killed")
 
     with subtest("(i) the token endpoint's echo of a refresh token stays inside"):
-        time.sleep(16)
+        wait_due()
         fake("mode", "fail-echo")
         minter.succeed("systemctl restart hush.service")
         cred("figaro")
@@ -295,16 +310,13 @@ pkgs.testers.runNixOSTest {
         assert "/var/lib/hush" not in listing, "the minter's state was backed up"
 
     with subtest("LoadCredential socket: a granted unit gets the raw token; anything else gets nothing"):
-        # Last, on a fresh hour-long sign-in, so no refresh timing above depends on it.
+        # Last, on a fresh hour-long sign-in.
         fake("mode", "ok")
-        fake("login_expires_in", 3600)
-        minter.succeed("systemctl stop hush-cred.socket hush-drop.socket hush-admin.socket hush-keel.socket hush-loadcredential.socket hush.service")
-        print(minter.succeed("${pkgs.python3}/bin/python3 ${ptyLogin} hush --replace"))
-        minter.succeed("systemctl start hush-cred.socket hush-drop.socket hush-admin.socket hush-keel.socket hush-loadcredential.socket")
+        sign_in(3600, "--replace")
         minter.succeed("test \"$(stat -c '%U %a' /run/hush/systemd.sock)\" = 'hush 600'")
         minter.succeed("systemctl start lc-granted.service lc-ungranted.service")
         got = minter.succeed("cat /run/lc/granted-token")
-        assert got == "at-login-2", got
+        assert got == "at-login-3", got
         # Refused: systemd starts the unit with an EMPTY credential file.
         minter.succeed("test -e /run/lc/granted-other && test ! -s /run/lc/granted-other")
         minter.succeed("test -e /run/lc/ungranted-token && test ! -s /run/lc/ungranted-token")
@@ -324,6 +336,6 @@ pkgs.testers.runNixOSTest {
                      "systemd: REFUSED a peer whose address is not systemd's /unit/<unit>/<id>",
                      "cred: audit anthropic-work principal=systemd:lc-granted.service uid=0 -> 200"]:
             assert line in journal, (line, journal)
-        assert "at-login-2" not in journal, "a token reached the journal"
+        assert "at-login-3" not in journal, "a token reached the journal"
   '';
 }

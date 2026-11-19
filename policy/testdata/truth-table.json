@@ -1,0 +1,189 @@
+[
+ {
+  "name": "1",
+  "kanidm": "member",
+  "baseline": true,
+  "temporary": "none",
+  "suspended": "none",
+  "ceiling": true,
+  "allow": true,
+  "status": 0,
+  "text": ""
+ },
+ {
+  "name": "2",
+  "kanidm": "not",
+  "baseline": true,
+  "temporary": "live",
+  "suspended": "none",
+  "ceiling": true,
+  "allow": true,
+  "status": 0,
+  "text": ""
+ },
+ {
+  "name": "3",
+  "kanidm": "member",
+  "baseline": true,
+  "temporary": "live",
+  "suspended": "none",
+  "ceiling": true,
+  "allow": true,
+  "status": 0,
+  "text": ""
+ },
+ {
+  "name": "4",
+  "kanidm": "not",
+  "baseline": true,
+  "temporary": "none",
+  "suspended": "none",
+  "ceiling": true,
+  "allow": false,
+  "status": 403,
+  "text": "no grant for <service>"
+ },
+ {
+  "name": "5",
+  "kanidm": "member",
+  "baseline": true,
+  "temporary": "none",
+  "suspended": "live",
+  "ceiling": true,
+  "allow": false,
+  "status": 403,
+  "text": "suspended for <service> until <t>"
+ },
+ {
+  "name": "6",
+  "kanidm": "not",
+  "baseline": true,
+  "temporary": "live",
+  "suspended": "live",
+  "ceiling": true,
+  "allow": false,
+  "status": 403,
+  "text": "suspended for <service> until <t>"
+ },
+ {
+  "name": "7",
+  "kanidm": "member",
+  "baseline": true,
+  "temporary": "none",
+  "suspended": "none",
+  "ceiling": false,
+  "allow": false,
+  "status": 403,
+  "text": "outside the flake ceiling for <service>"
+ },
+ {
+  "name": "8",
+  "kanidm": "not",
+  "baseline": true,
+  "temporary": "live",
+  "suspended": "none",
+  "ceiling": false,
+  "allow": false,
+  "status": 403,
+  "text": "outside the flake ceiling for <service>"
+ },
+ {
+  "name": "9",
+  "kanidm": "not",
+  "baseline": true,
+  "temporary": "expired",
+  "suspended": "none",
+  "ceiling": true,
+  "allow": false,
+  "status": 403,
+  "text": "no grant for <service> (temporary expired <t>)"
+ },
+ {
+  "name": "10",
+  "kanidm": "member",
+  "baseline": true,
+  "temporary": "none",
+  "suspended": "expired",
+  "ceiling": true,
+  "allow": true,
+  "status": 0,
+  "text": ""
+ },
+ {
+  "name": "11",
+  "kanidm": "not",
+  "baseline": true,
+  "temporary": "none",
+  "suspended": "none",
+  "ceiling": true,
+  "allow": false,
+  "status": 403,
+  "text": "no grant for <service>"
+ },
+ {
+  "name": "12",
+  "kanidm": "member",
+  "baseline": false,
+  "temporary": "none",
+  "suspended": "none",
+  "ceiling": false,
+  "allow": false,
+  "status": 403,
+  "text": "outside the flake ceiling for <service>"
+ },
+ {
+  "name": "13",
+  "kanidm": "member",
+  "baseline": true,
+  "temporary": "none",
+  "suspended": "live-any",
+  "ceiling": true,
+  "allow": false,
+  "status": 403,
+  "text": "suspended for <service> until <t>"
+ },
+ {
+  "name": "14",
+  "kanidm": "member",
+  "baseline": true,
+  "temporary": "none",
+  "suspended": "live-other-grant",
+  "ceiling": true,
+  "allow": true,
+  "status": 0,
+  "text": ""
+ },
+ {
+  "name": "15",
+  "kanidm": "not",
+  "baseline": true,
+  "temporary": "live-other-subject",
+  "suspended": "none",
+  "ceiling": true,
+  "allow": false,
+  "status": 403,
+  "text": "no grant for <service>"
+ },
+ {
+  "name": "D3b",
+  "kanidm": "not",
+  "baseline": true,
+  "temporary": "expired",
+  "suspended": "none",
+  "ceiling": true,
+  "allow": false,
+  "status": 403,
+  "text": "no grant for <service> (temporary expired <t>)"
+ },
+ {
+  "name": "16",
+  "kanidm": "member",
+  "baseline": true,
+  "temporary": "none",
+  "suspended": "live-other-subject",
+  "ceiling": true,
+  "allow": true,
+  "status": 0,
+  "text": ""
+ }
+]

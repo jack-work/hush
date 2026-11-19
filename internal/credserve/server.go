@@ -45,9 +45,13 @@ type Server struct {
 	staleAt     map[string]time.Time
 	staleFile   string
 	staleLoaded bool
-	connMu      sync.Mutex
-	connections sync.WaitGroup
-	conns       map[net.Conn]bool
+	overlay     overlayStore
+	overlayFile string
+	// overlayAdmins are the uids the overlay admin socket serves.
+	overlayAdmins map[uint32]bool
+	connMu        sync.Mutex
+	connections   sync.WaitGroup
+	conns         map[net.Conn]bool
 }
 
 type cell struct {
@@ -64,6 +68,7 @@ func NewServer(cfg *Config, mgr *oauth.Manager, allowUID uint32, logger *log.Log
 		Now:                time.Now,
 		MinRefreshInterval: DefaultMinRefreshInterval,
 		cells:              map[string]*cell{},
+		overlay:            newOverlayStore(),
 		conns:              map[net.Conn]bool{},
 	}
 }
@@ -107,9 +112,13 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				if u, ok := r.Context().Value(peerKey{}).(uint32); ok {
 					uid = strconv.FormatUint(uint64(u), 10)
 				}
-				s.logger.Printf("cred: audit %s principal=%s uid=%s -> %d", name, who, uid, rec.status)
+				s.logger.Printf("cred: audit %s principal=%s uid=%s%s -> %d", name, who, uid, authzFields(r), rec.status)
 			}()
 		}
+	}
+	if principal == OverlayAdminFDName {
+		s.serveOverlayAdmin(w, r)
+		return
 	}
 	if principal != "" {
 		s.servePrincipal(w, r, principal)
@@ -126,6 +135,9 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if s.loginRoute(w, r) {
+		return
+	}
+	if s.overlayRoute(w, r, false, true, "owner") {
 		return
 	}
 	if r.URL.Path == "/status" {

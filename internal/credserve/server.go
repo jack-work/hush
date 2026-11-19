@@ -43,6 +43,8 @@ type Server struct {
 	pending     map[string]*remoteLogin
 	exec        execState
 	staleAt     map[string]time.Time
+	staleFile   string
+	staleLoaded bool
 	connMu      sync.Mutex
 	connections sync.WaitGroup
 	conns       map[net.Conn]bool
@@ -172,7 +174,7 @@ func (s *Server) refreshRoute(w http.ResponseWriter, r *http.Request) bool {
 	}
 	finish, performed, err := s.beginRemoteRefresh(name)
 	if err != nil {
-		writeOperationError(w, name, err)
+		s.writeOperationError(w, name, err)
 		return true
 	}
 	defer finish()
@@ -183,13 +185,13 @@ func (s *Server) refreshRoute(w http.ResponseWriter, r *http.Request) bool {
 	current, err := s.mgr.Lease(name)
 	if errors.Is(err, oauth.ErrNotFound) {
 		if adoptErr := s.mgr.Adopt(name); adoptErr != nil {
-			writeCredentialFailure(w, name, adoptErr)
+			s.writeCredentialFailure(w, name, adoptErr)
 			return true
 		}
 		current, err = s.mgr.Lease(name)
 	}
 	if err != nil || s.pinnedStale(name, current) {
-		writeCredentialFailure(w, name, err)
+		s.writeCredentialFailure(w, name, err)
 		return true
 	}
 	var refreshErr error
@@ -197,12 +199,12 @@ func (s *Server) refreshRoute(w http.ResponseWriter, r *http.Request) bool {
 		_, refreshErr = s.mgr.TryRefresh(name)
 	}
 	if refreshErr != nil {
-		writeOperationError(w, name, refreshErr)
+		s.writeOperationError(w, name, refreshErr)
 		return true
 	}
 	l, err := s.mgr.Lease(name)
 	if err != nil || l.SignInNeeded || l.ExpiresAt.Sub(s.Now()) < serveFloor {
-		writeCredentialFailure(w, name, err)
+		s.writeCredentialFailure(w, name, err)
 		return true
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -218,11 +220,11 @@ func (s *Server) answer(w http.ResponseWriter, name string) {
 	}
 	lease, err := s.mgr.Lease(name)
 	if errors.Is(err, oauth.ErrStopped) || errors.Is(err, oauth.ErrDrainUncertain) {
-		writeCredentialFailure(w, name, err)
+		s.writeCredentialFailure(w, name, err)
 		return
 	}
 	if err == nil && s.pinnedStale(name, lease) {
-		writeStale(w, name)
+		s.writeStale(w, name)
 		return
 	}
 	switch {
@@ -240,7 +242,7 @@ func (s *Server) answer(w http.ResponseWriter, name string) {
 
 	lease, err = s.mgr.Lease(name)
 	if err != nil || lease.SignInNeeded {
-		writeCredentialFailure(w, name, err)
+		s.writeCredentialFailure(w, name, err)
 		return
 	}
 	if lease.ExpiresAt.Sub(s.Now()) < serveFloor {
@@ -248,7 +250,7 @@ func (s *Server) answer(w http.ResponseWriter, name string) {
 		return
 	}
 	if s.pinnedStale(name, lease) {
-		writeStale(w, name)
+		s.writeStale(w, name)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -309,7 +311,8 @@ func (s *Server) paced(name string, attempt func() error) bool {
 	return true
 }
 
-func writeStale(w http.ResponseWriter, name string) {
+func (s *Server) writeStale(w http.ResponseWriter, name string) {
+	s.staleSince(name, s.Now())
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusServiceUnavailable)
 	_ = json.NewEncoder(w).Encode(map[string]string{
@@ -325,13 +328,13 @@ func writeError(w http.ResponseWriter, status int, code, reason string) {
 	_ = json.NewEncoder(w).Encode(map[string]string{"error": code, "reason": reason})
 }
 
-func writeCredentialFailure(w http.ResponseWriter, name string, err error) {
+func (s *Server) writeCredentialFailure(w http.ResponseWriter, name string, err error) {
 	switch {
 	case errors.Is(err, oauth.ErrStopped):
 		writeError(w, http.StatusServiceUnavailable, "manager_stopped", "service stopping")
 	case errors.Is(err, oauth.ErrDrainUncertain):
 		writeError(w, http.StatusServiceUnavailable, "credential_uncertain", "credential state unresolved")
 	default:
-		writeStale(w, name)
+		s.writeStale(w, name)
 	}
 }

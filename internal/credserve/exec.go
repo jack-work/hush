@@ -184,7 +184,7 @@ func (l *limitedWriter) Write(p []byte) (int, error) {
 func (s *Server) answerExec(w http.ResponseWriter, name string) {
 	t, err := s.execGet(name, false)
 	if err != nil {
-		writeExecFailure(w, name, err)
+		s.writeExecFailure(w, name, err)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -198,7 +198,7 @@ func (s *Server) answerExec(w http.ResponseWriter, name string) {
 
 func (s *Server) refreshExec(w http.ResponseWriter, name string, performed bool) {
 	if _, err := s.execGet(name, performed); err != nil {
-		writeExecFailure(w, name, err)
+		s.writeExecFailure(w, name, err)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -206,9 +206,9 @@ func (s *Server) refreshExec(w http.ResponseWriter, name string, performed bool)
 	_ = json.NewEncoder(w).Encode(map[string]any{"ready": true, "refreshed": performed})
 }
 
-func writeExecFailure(w http.ResponseWriter, name string, err error) {
+func (s *Server) writeExecFailure(w http.ResponseWriter, name string, err error) {
 	if errors.Is(err, errExecSignIn) {
-		writeStale(w, name)
+		s.writeStale(w, name)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")

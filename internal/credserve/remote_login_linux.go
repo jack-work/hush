@@ -126,7 +126,7 @@ func (s *Server) startLogin(w http.ResponseWriter, name string, in Instance) {
 		return
 	}
 	if err := s.mgr.BeginLogin(name); err != nil {
-		writeOperationError(w, name, err)
+		s.writeOperationError(w, name, err)
 		return
 	}
 	pkce, err := oauth.GeneratePKCE()
@@ -206,19 +206,19 @@ func (s *Server) completeLogin(w http.ResponseWriter, r *http.Request, name stri
 		err = s.mgr.CompleteChatGPTLogin(ctx, in.OAuthConfig(name), code, pending.verifier)
 	}
 	if err != nil {
-		writeOperationError(w, name, err)
+		s.writeOperationError(w, name, err)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{"status": "signed-in"})
 }
 
-func writeOperationError(w http.ResponseWriter, name string, err error) {
+func (s *Server) writeOperationError(w http.ResponseWriter, name string, err error) {
 	if errors.Is(err, oauth.ErrOperationBusy) {
 		writeError(w, 409, "operation_busy", "credential operation busy")
 		return
 	}
-	writeCredentialFailure(w, name, err)
+	s.writeCredentialFailure(w, name, err)
 }
 
 func (s *Server) beginRemoteRefresh(name string) (func(), bool, error) {

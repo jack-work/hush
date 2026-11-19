@@ -122,12 +122,15 @@
 
       nixosModules.hush-cred = self.nixosModules.hush;
 
+      nixosModules.hush-workload = import ./nix/workload-module.nix self;
+
       checks.x86_64-linux = let
         pkgs = nixpkgs.legacyPackages.x86_64-linux;
       in {
         cred-vm = import ./nix/cred-test.nix { inherit pkgs self; };
         cred-no-container = import ./nix/cred-no-container.nix { inherit pkgs self nixpkgs; };
         cred-rename-vm = import ./nix/cred-rename-test.nix { inherit pkgs self; };
+        workload-vm = import ./nix/workload-test.nix { inherit pkgs self; };
       };
 
       devShells = forAllSystems ({ pkgs }: let

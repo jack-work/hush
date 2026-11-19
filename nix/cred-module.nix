@@ -108,6 +108,13 @@ let
       description = "Callers with their own socket and grant list.";
     };
 
+    consentGrants = mkOption {
+      type = types.nullOr types.str;
+      default = null;
+      example = "/var/lib/grants/grants.json";
+      description = "Absolute path of a consent grants file ({\"grants\": [{id, principal, credential, expires_at, approved_by}]}), read at every request: a live row grants that credential to that principal beside its credentials list, audited per use. The minter's user must be able to read it. null: no consent grants.";
+    };
+
     recipient = mkOption {
       type = types.strMatching "age1[0-9a-z]+";
       description = "Public half of the identity: login encrypts to it without holding the key.";
@@ -224,6 +231,8 @@ let
       principals = lib.mapAttrs (_: principalToml) principals;
     } // lib.optionalAttrs (cfg.unitGrants != { }) {
       systemd = { socket = cfg.systemdSocketPath; units = cfg.unitGrants; };
+    } // lib.optionalAttrs (cfg.consentGrants != null) {
+      consent_grants = cfg.consentGrants;
     });
 
     setfacl = "${pkgs.acl}/bin/setfacl";

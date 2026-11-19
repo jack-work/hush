@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
@@ -61,6 +62,11 @@ type Config struct {
 	// Systemd, when set, adds the LoadCredential socket: units granted by
 	// name receive a raw token from systemd itself.
 	Systemd *Systemd `toml:"systemd"`
+	// ConsentGrants is the path of a consent grants file ({"grants": [{id,
+	// principal, credential, expires_at, approved_by}]}), read at every use:
+	// a live row grants that credential to that principal beside the
+	// config's own grants. Empty: no consent grants.
+	ConsentGrants string `toml:"consent_grants"`
 
 	recipient age.Recipient
 }
@@ -110,8 +116,11 @@ func ParseConfig(data []byte) (*Config, error) {
 			return nil, err
 		}
 	}
+	if c.ConsentGrants != "" && !filepath.IsAbs(c.ConsentGrants) {
+		return nil, fmt.Errorf("cred config: consent_grants must be an absolute path, not %q", c.ConsentGrants)
+	}
 	for name, p := range c.Principals {
-		if err := p.validate(name, c.Instances); err != nil {
+		if err := p.validate(name, c.Instances, c.ConsentGrants != ""); err != nil {
 			return nil, err
 		}
 	}
@@ -123,7 +132,7 @@ func ParseConfig(data []byte) (*Config, error) {
 	return &c, nil
 }
 
-func (p Principal) validate(name string, instances map[string]Instance) error {
+func (p Principal) validate(name string, instances map[string]Instance, consent bool) error {
 	fail := func(format string, a ...any) error {
 		return fmt.Errorf("cred config: principal %s: "+format, append([]any{name}, a...)...)
 	}
@@ -141,7 +150,8 @@ func (p Principal) validate(name string, instances map[string]Instance) error {
 			return fail("an empty user")
 		}
 	}
-	if len(p.Credentials) == 0 && !p.Login && !p.Refresh {
+	if len(p.Credentials) == 0 && !p.Login && !p.Refresh && !consent {
+		// With a consent grants file, a principal may hold consent grants only.
 		return fail("credentials is required")
 	}
 	for _, cred := range p.Credentials {

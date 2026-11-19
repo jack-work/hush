@@ -104,7 +104,8 @@ func (s *Server) servePrincipal(w http.ResponseWriter, r *http.Request, name str
 		_ = json.NewEncoder(w).Encode(map[string]string{"error": principalOnlyCred})
 		return
 	}
-	if !p.Credentials[cred] {
+	grant, err := s.authorizeCred(p, cred)
+	if err != nil {
 		// Checked before existence, so a principal learns nothing about
 		// credentials it was not granted.
 		s.logger.Printf("cred: REFUSED %s for principal %s uid %d: not granted", cred, name, uid)
@@ -116,6 +117,19 @@ func (s *Server) servePrincipal(w http.ResponseWriter, r *http.Request, name str
 			"reason": fmt.Sprintf("credential %q is not granted to principal %q", cred, name),
 		})
 		return
+	}
+	if grant != nil {
+		// A consent grant use is always audited, with the grant id and its approver. Never the token.
+		rec := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
+		w = rec
+		defer func() {
+			s.logger.Printf("cred: consent-grant use %q principal=%s credential=%s uid=%d approved_by=%q expires_at=%d -> %d",
+				grant.ID, name, cred, uid, grant.ApprovedBy, int64(grant.ExpiresAt), rec.status)
+		}()
+		if _, ok := s.cfg.Instances[cred]; !ok {
+			writeError(w, http.StatusNotFound, "unknown_credential", "no such credential")
+			return
+		}
 	}
 	s.answer(w, cred)
 }

@@ -174,5 +174,16 @@
   "allow": false,
   "status": 403,
   "text": "no grant for <service> (temporary expired <t>)"
+ },
+ {
+  "name": "16",
+  "kanidm": "member",
+  "baseline": true,
+  "temporary": "none",
+  "suspended": "live-other-subject",
+  "ceiling": true,
+  "allow": true,
+  "status": 0,
+  "text": ""
  }
 ]

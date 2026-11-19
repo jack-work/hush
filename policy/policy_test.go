@@ -1,8 +1,8 @@
 package policy
 
 import (
+	_ "embed"
 	"encoding/json"
-	"os"
 	"strings"
 	"testing"
 	"time"
@@ -15,7 +15,7 @@ type vector struct {
 	Kanidm    string `json:"kanidm"`    // member | not
 	Baseline  bool   `json:"baseline"`  // the baseline lists (role, service)
 	Temporary string `json:"temporary"` // none | live | expired | live-other-subject
-	Suspended string `json:"suspended"` // none | live | expired | live-any | live-other-grant
+	Suspended string `json:"suspended"` // none | live | expired | live-any | live-other-grant | live-other-subject
 	Ceiling   bool   `json:"ceiling"`
 	Allow     bool   `json:"allow"`
 	Status    int    `json:"status"`
@@ -24,14 +24,17 @@ type vector struct {
 
 const principal, service = "keel", "ghe"
 
+// The shared truth table travels with the test binary.
+//
+//go:embed testdata/truth-table.json
+var truthTable []byte
+
+// Every row of the shared table, exactly (allow, status and text). RED if the
+// ceiling, the suspension or the expiry check goes, or the table shrinks.
 func TestTruthTable(t *testing.T) {
-	raw, err := os.ReadFile("testdata/truth-table.json")
-	if err != nil {
-		t.Fatal(err)
-	}
 	var vectors []vector
-	if err := json.Unmarshal(raw, &vectors); err != nil {
-		t.Fatal(err)
+	if err := json.Unmarshal(truthTable, &vectors); err != nil || len(vectors) != 17 {
+		t.Fatalf("truth table: %d rows (want 17), %v", len(vectors), err)
 	}
 	now := time.Date(2026, 11, 19, 12, 0, 0, 0, time.UTC)
 	live, gone := now.Add(time.Hour), now.Add(-time.Minute)
@@ -60,6 +63,8 @@ func TestTruthTable(t *testing.T) {
 			case "live-any":
 				until = live
 				o.Suspensions = append(o.Suspensions, entry(principal, Wildcard, live))
+			case "live-other-subject":
+				o.Suspensions = append(o.Suspensions, entry("rou2", Wildcard, live))
 			case "live-other-grant":
 				o.Suspensions = append(o.Suspensions, entry(principal, "grant-ado", live))
 			case "expired":

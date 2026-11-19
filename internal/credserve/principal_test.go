@@ -68,7 +68,9 @@ client_id = "Iv1.x"
 	return cfg
 }
 
-func newPrincipalRig(t *testing.T, allow, extra string) *prig {
+// newPrincipalRig serves config extra on a socket per principal; each before
+// runs on the rig once the server exists and before anything is served.
+func newPrincipalRig(t *testing.T, allow, extra string, before ...func(*rig)) *prig {
 	t.Helper()
 	ep := newEndpoint(t)
 	key, err := age.GenerateX25519Identity()
@@ -99,6 +101,9 @@ func newPrincipalRig(t *testing.T, allow, extra string) *prig {
 		t.Fatal(err)
 	}
 	r.srv.SetPrincipals(ps, allow != "")
+	for _, f := range before {
+		f(r)
+	}
 
 	dir, err := os.MkdirTemp("", "credsock-*")
 	if err != nil {

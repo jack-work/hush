@@ -38,9 +38,9 @@ copilot = "copilot-work"
 `, managerUID)
 }
 
-func newSystemdRig(t *testing.T, managerUID uint32) *srig {
+func newSystemdRig(t *testing.T, managerUID uint32, before ...func(*rig)) *srig {
 	t.Helper()
-	p := newPrincipalRig(t, "", systemdConfig(managerUID))
+	p := newPrincipalRig(t, "", systemdConfig(managerUID), before...)
 	dir, err := os.MkdirTemp("", "sdsock-*")
 	if err != nil {
 		t.Fatal(err)
@@ -189,5 +189,46 @@ client_id = "Iv1.x"
 		if err == nil || !strings.Contains(err.Error(), c.want) {
 			t.Fatalf("%s: got %v, want %q", name, err, c.want)
 		}
+	}
+}
+
+// A unit reaches a credential through the one grant check: its own grant for
+// the id, else a live consent grant to principal systemd:<unit> for the
+// instance the id names. Anything else writes nothing.
+func TestSystemdConsentGrants(t *testing.T) {
+	const unit = "keel-lieutenant.service"
+	for _, c := range []struct {
+		name, unit, id string
+		file           []byte
+		want           string
+		used           bool
+		log            string
+	}{
+		{name: "live consent grant delivers", unit: unit, id: "anthropic-work", want: "at-seed", used: true,
+			file: grantsFile(grantRow("systemd:"+unit, instName, time.Hour)), log: `consent-grant use "g-systemd:` + unit},
+		{name: "consent grant to another unit", unit: "intruder.service", id: "anthropic-work",
+			file: grantsFile(grantRow("systemd:"+unit, instName, time.Hour)), log: `REFUSED intruder.service credential "anthropic-work": no grant`},
+		{name: "expired consent grant", unit: unit, id: "anthropic-work",
+			file: grantsFile(grantRow("systemd:"+unit, instName, -time.Second)), log: "no grant"},
+		{name: "an id equal to a granted instance is not that grant", unit: unit, id: "anthropic-work",
+			file: grantsFile(), log: `REFUSED keel-lieutenant.service credential "anthropic-work": no grant`},
+		{name: "consent grant for a name that is no instance", unit: unit, id: "not-an-instance", used: true,
+			file: grantsFile(grantRow("systemd:"+unit, "not-an-instance", time.Hour)), log: "-> 404"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			path, put := consentFile(t)
+			s := newSystemdRig(t, me(), withConsent(path))
+			put(c.file)
+			if got := s.load(c.unit, c.id); got != c.want {
+				t.Fatalf("got %q, want %q", got, c.want)
+			}
+			logs := s.logs.String()
+			if strings.Contains(logs, "consent-grant use") != c.used || !strings.Contains(logs, c.log) {
+				t.Fatalf("logs (want use=%v, %q): %s", c.used, c.log, logs)
+			}
+			if strings.Contains(logs, "at-seed") {
+				t.Fatalf("a token reached the log: %s", logs)
+			}
+		})
 	}
 }

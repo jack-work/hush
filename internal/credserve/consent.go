@@ -87,3 +87,10 @@ func (s *Server) authorizeCred(p PrincipalAuth, credential string) (*ConsentGran
 	}
 	return &g, nil
 }
+
+// logConsentUse is the audit line of one consent grant use: grant id, approver,
+// principal, credential, peer uid, expiry and status. Never the token.
+func (s *Server) logConsentUse(g *ConsentGrant, principal, credential string, uid uint32, status int) {
+	s.logger.Printf("cred: consent-grant use %q principal=%s credential=%s uid=%d approved_by=%q expires_at=%d -> %d",
+		g.ID, principal, credential, uid, g.ApprovedBy, int64(g.ExpiresAt), status)
+}

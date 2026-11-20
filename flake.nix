@@ -21,7 +21,7 @@
       overlays.default = final: prev: {
         hush = final.buildGoModule rec {
           pname = "hush";
-          version = "0.18.3";
+          version = "0.18.4";
           src = self;
           vendorHash = "sha256-/UUCtv5cvtKImWE1rh89DMwHS2qKN0pRCyKFz3dxlYA=";
           subPackages = [ "." ];

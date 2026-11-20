@@ -196,6 +196,8 @@ func TestLoadSandboxesRefusesMapsThatCannotAttest(t *testing.T) {
 		{"an empty machine name", `{"template":"t","base":0,"size":1,"machines":{"":{"id":"x","k":0}}}`, `sandboxes: machine name ""`},
 		{"two machines in one k", `{"template":"t","base":0,"size":1,"machines":{"a":{"id":"a","k":2},"b":{"id":"b","k":2}}}`, "share k=2"},
 		{"a range past 2^32", `{"template":"t","base":4294901760,"size":65536,"machines":{"a":{"id":"a","k":1}}}`, "sandboxes: a: range k=1 overflows"},
+		// k+1 must be taken in 64 bits: uint32 k=2^32-1 plus one wraps to 0 and the range check passed (hush#45 F1).
+		{"k = 2^32-1 (k+1 wraps in 32 bits)", `{"template":"t","base":0,"size":65536,"machines":{"a":{"id":"a","k":4294967295}}}`, "sandboxes: a: range k=4294967295 overflows"},
 		{"not json", `nope`, "invalid character"},
 	}
 	for _, c := range cases {

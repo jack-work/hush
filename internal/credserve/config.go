@@ -50,6 +50,8 @@ type Principal struct {
 	Socket      string   `toml:"socket"`
 	Login       bool     `toml:"login"`
 	Refresh     bool     `toml:"refresh"`
+
+	RefreshCredentials []string `toml:"refresh_credentials"`
 }
 
 type Config struct {
@@ -158,6 +160,17 @@ func (p Principal) validate(name string, instances map[string]Instance, consent 
 		if _, ok := instances[cred]; !ok {
 			return fail("credential %q is not an instance", cred)
 		}
+	}
+	for _, cred := range p.RefreshCredentials {
+		if _, ok := instances[cred]; !ok {
+			return fail("refresh_credentials %q is not an instance", cred)
+		}
+	}
+	if len(p.RefreshCredentials) > 0 && !p.Refresh {
+		return fail("refresh_credentials needs refresh = true")
+	}
+	if p.Refresh && len(p.RefreshCredentials) == 0 && len(p.Credentials) == 0 && !consent {
+		return fail("refresh = true grants no instance: set refresh_credentials, credentials or consent_grants")
 	}
 	if p.Socket != "" && !strings.HasPrefix(p.Socket, "/") {
 		return fail("socket %q is not an absolute path", p.Socket)

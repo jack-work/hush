@@ -7,7 +7,7 @@ minter as system user `hush` (uid and gid 476), with its state in
 | socket | unit | who connects | what it answers |
 |---|---|---|---|
 | `/run/hush/cred.sock` | `hush-cred.socket` | `credUsers` (default `[ "figaro" ]`) | `GET /cred/<name>` for every instance: a short-lived bearer and its expiry. Nothing else. |
-| `/run/hush/drop.sock` | `hush-drop.socket` | `dropUsers` (default none, and then no socket) | `POST /login-start/<name>`, `POST /login-complete/<name>` (ChatGPT, Copilot and Anthropic instances), `POST /refresh/<name>`. Replies carry status, a sign-in URL or a device code, never a token. |
+| `/run/hush/drop.sock` | `hush-drop.socket` | `dropUsers` (default none, and then no socket) | `POST /login-start/<name>`, `POST /login-complete/<name>` (ChatGPT, Copilot and Anthropic instances), `POST /refresh/<name>` for the instances in `dropRefresh` (default every instance) or under a live consent grant to the `drop` principal; any other is 403 `not_granted`. Replies carry status, a sign-in URL or a device code, never a token. |
 | `/run/hush/admin.sock` | `hush-admin.socket` | the `hush` uid; root reaches it with `runuser -u hush` | `GET /status`, `POST /refresh/<name>`, the sign-in routes, `GET /cred/<name>` |
 | `/run/hush/<principal>.sock` | `hush-<principal>.socket` | that principal's `users` | `GET /cred/<name>` for its granted instances |
 | `/run/hush/systemd.sock` | `hush-loadcredential.socket` | systemd itself (peer uid 0), for units in `unitGrants` (default none, and then no socket) | raw bytes, no HTTP: the token for `LoadCredential=<id>:/run/hush/systemd.sock`, or nothing |

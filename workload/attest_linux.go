@@ -56,12 +56,72 @@ func PeerAttestor(conn net.Conn) (Peer, error) {
 	}
 	mixed := false
 	if _, dir, ok := UnitOf(cg); ok {
-		mixed = !unitRunsAs(dir, cred.Uid)
+		mixed = !hostRoots.unitRunsAs(dir, cred.Uid)
+	}
+	var machine *Machine
+	if t, inst, rest, ok := MachineOf(cg); ok {
+		machine = hostRoots.readMachine(machinedRegistry, t, inst, rest)
 	}
 	if err := unix.PidfdSendSignal(pidfd, 0, nil, 0); err != nil && !errors.Is(err, unix.EPERM) {
 		return Peer{}, fmt.Errorf("%w: the peer exited while it was read: %v", ErrUnattested, err)
 	}
-	return Peer{PID: pid, UID: cred.Uid, Cgroup: cg, Mixed: mixed}, nil
+	return Peer{PID: pid, UID: cred.Uid, Cgroup: cg, Mixed: mixed, Machine: machine}, nil
+}
+
+// roots are where the attestor reads the kernel's views; tests point them at a fixture tree.
+type roots struct{ proc, cgroup string }
+
+var hostRoots = roots{proc: "/proc", cgroup: "/sys/fs/cgroup"}
+
+// Registry answers, for a machine name, the unit and leader pid systemd-machined registered for it.
+type Registry func(name string) (unit string, leader uint32, err error)
+
+// readMachine gathers the facts MachinePolicy decides on. A fact it cannot read stays at its refusing zero value.
+func (r roots) readMachine(reg Registry, template, instance, rest string) *Machine {
+	unit := template + "@" + instance + ".service"
+	m := &Machine{Template: template, Instance: instance}
+	m.Payload = rest == "payload" || strings.HasPrefix(rest, "payload/")
+	regUnit, leader, err := reg(instance)
+	m.Registered = err == nil && regUnit == unit && leader > 0
+	if !m.Registered {
+		return m
+	}
+	if raw, err := os.ReadFile(filepath.Join(r.proc, strconv.FormatUint(uint64(leader), 10), "uid_map")); err == nil {
+		m.UIDMap = parseUIDMap(string(raw))
+	}
+	if uids, err := r.uidsUnder(filepath.Join("/machine.slice", unit, "payload")); err == nil {
+		m.UIDs = uids // a partial walk could miss a mixed process: on any error, no uids (the policy refuses)
+	}
+	return m
+}
+
+// uidsUnder lists the uid of every live process in a cgroup subtree (a process that exits mid-walk is skipped).
+func (r roots) uidsUnder(dir string) ([]uint32, error) {
+	var uids []uint32
+	err := filepath.WalkDir(filepath.Join(r.cgroup, dir), func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if !d.IsDir() {
+			return nil
+		}
+		raw, err := os.ReadFile(filepath.Join(path, "cgroup.procs"))
+		if err != nil {
+			return err
+		}
+		for f := range strings.FieldsSeq(string(raw)) {
+			owner, err := r.uidOf(f)
+			if errors.Is(err, fs.ErrNotExist) {
+				continue
+			}
+			if err != nil {
+				return err
+			}
+			uids = append(uids, owner)
+		}
+		return nil
+	})
+	return uids, err
 }
 
 func pidfdPID(pidfd int) (int, error) {
@@ -96,37 +156,21 @@ func cgroupOf(pid int) (string, error) {
 	return "", errors.Join(ErrUnattested, errors.New("no cgroup v2 path"))
 }
 
-func unitRunsAs(dir string, uid uint32) bool {
-	root := filepath.Join("/sys/fs/cgroup", dir)
-	ok := true
-	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return err
+func (r roots) unitRunsAs(dir string, uid uint32) bool {
+	uids, err := r.uidsUnder(dir)
+	if err != nil {
+		return false
+	}
+	for _, u := range uids {
+		if u != uid {
+			return false
 		}
-		if !d.IsDir() {
-			return nil
-		}
-		raw, err := os.ReadFile(filepath.Join(path, "cgroup.procs"))
-		if err != nil {
-			return err
-		}
-		for f := range strings.FieldsSeq(string(raw)) {
-			owner, err := uidOf(f)
-			if errors.Is(err, fs.ErrNotExist) {
-				continue
-			}
-			if err != nil || owner != uid {
-				ok = false
-				return fs.SkipAll
-			}
-		}
-		return nil
-	})
-	return ok && err == nil
+	}
+	return true
 }
 
-func uidOf(pid string) (uint32, error) {
-	raw, err := os.ReadFile("/proc/" + pid + "/status")
+func (r roots) uidOf(pid string) (uint32, error) {
+	raw, err := os.ReadFile(filepath.Join(r.proc, pid, "status"))
 	if err != nil {
 		return 0, err
 	}

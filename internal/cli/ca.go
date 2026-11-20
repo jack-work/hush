@@ -102,6 +102,8 @@ func init() {
 	f.String("intermediate-key", "", "its private key PEM, e.g. under $CREDENTIALS_DIRECTORY (required)")
 	f.String("jwt-key", "", "ECDSA P-256 key PEM for JWT-SVIDs (none: JWT-SVIDs are refused)")
 	f.String("socket", "", "bind this path when not socket-activated")
+	f.String("policy", "node", "node: unit and uid identities; node+machines: also sandbox identities from --machines")
+	f.String("machines", "", "the sandbox map JSON for --policy node+machines (template, base, size, machines)")
 	for _, c := range []*cobra.Command{workloadJWTCmd, workloadX509Cmd} {
 		c.Flags().String("trust-domain", "", "the troupe (required)")
 		c.Flags().String("socket", "", "the workload socket (default $"+workload.SocketEnv+", /run/hush/workload.sock, $XDG_RUNTIME_DIR/hush/workload.sock)")
@@ -317,12 +319,39 @@ func runWorkloadServe(cmd *cobra.Command, _ []string) error {
 			return err
 		}
 	}
-	srv := workload.NewServer(workload.PeerAttestor, workload.NodePolicy(td, node), auth)
+	policy, err := servePolicy(cmd, td, node)
+	if err != nil {
+		return err
+	}
+	srv := workload.NewServer(workload.PeerAttestor, policy, auth)
 	srv.Log = slog.New(slog.NewJSONHandler(os.Stderr, nil))
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 	defer stop()
 	srv.Log.Info("workload socket serving", "trust_domain", td, "node", node, "intermediate_expires", auth.IntermediateCert.NotAfter)
 	return srv.Serve(ctx, ln)
+}
+
+// servePolicy builds the policy --policy names; node+machines needs --machines, and node refuses one.
+func servePolicy(cmd *cobra.Command, td, node string) (workload.Policy, error) {
+	name, _ := cmd.Flags().GetString("policy")
+	path, _ := cmd.Flags().GetString("machines")
+	switch name {
+	case "node":
+		if path != "" {
+			return nil, errors.New("--machines needs --policy node+machines")
+		}
+		return workload.NodePolicy(td, node), nil
+	case "node+machines":
+		if path == "" {
+			return nil, errors.New("--policy node+machines needs --machines")
+		}
+		s, err := workload.LoadSandboxes(path)
+		if err != nil {
+			return nil, err
+		}
+		return workload.MachinePolicy(td, node, s), nil
+	}
+	return nil, fmt.Errorf("--policy %q: want node or node+machines", name)
 }
 
 func workloadClient(cmd *cobra.Command) (*workload.Client, error) {

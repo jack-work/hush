@@ -46,6 +46,33 @@ in
       description = "Host path of an ECDSA P-256 key for JWT-SVIDs, by LoadCredential. Null refuses JWT-SVIDs.";
     };
 
+    policy = mkOption {
+      type = types.enum [ "node" "node+machines" ];
+      default = "node";
+      description = "node: unit and uid identities. node+machines: also sandbox identities for the machines in `sandboxes`.";
+    };
+
+    sandboxes = mkOption {
+      default = null;
+      description = "The sandbox map for policy node+machines (hush docs/identity-contracts.md, sandbox identity).";
+      type = types.nullOr (types.submodule {
+        options = {
+          template = mkOption { type = types.strMatching "[A-Za-z0-9_.-]+"; description = "The machine unit template, e.g. pool-svc."; };
+          base = mkOption { type = types.ints.u32; description = "First host uid of range k=0."; };
+          size = mkOption { type = types.ints.positive; description = "uids per range."; };
+          machines = mkOption {
+            type = types.attrsOf (types.submodule {
+              options = {
+                id = mkOption { type = types.str; };
+                k = mkOption { type = types.ints.unsigned; };
+              };
+            });
+            description = "Keyed by the machine instance without its -g<generation> (spool-<id>).";
+          };
+        };
+      });
+    };
+
     socketPath = mkOption {
       type = types.str;
       readOnly = true;
@@ -58,6 +85,10 @@ in
       {
         assertion = !(lib.hasPrefix builtins.storeDir cfg.intermediateKey);
         message = "services.hush-workload.intermediateKey is in the world-readable store; give a host path";
+      }
+      {
+        assertion = (cfg.policy == "node+machines") == (cfg.sandboxes != null);
+        message = "services.hush-workload: policy node+machines needs sandboxes, and sandboxes needs policy node+machines";
       }
       {
         assertion = cfg.jwtKey == null || !(lib.hasPrefix builtins.storeDir cfg.jwtKey);
@@ -89,7 +120,9 @@ in
           "--root-cert" "${cfg.rootCert}"
           "--intermediate-cert" "${cfg.intermediateCert}"
           "--intermediate-key" "%d/intermediate"
-        ] ++ lib.optionals (cfg.jwtKey != null) [ "--jwt-key" "%d/jwt" ]);
+        ] ++ lib.optionals (cfg.jwtKey != null) [ "--jwt-key" "%d/jwt" ]
+          ++ [ "--policy" cfg.policy ]
+          ++ lib.optionals (cfg.sandboxes != null) [ "--machines" "${pkgs.writeText "hush-sandboxes.json" (builtins.toJSON cfg.sandboxes)}" ]);
         LoadCredential = [ "intermediate:${cfg.intermediateKey}" ]
           ++ lib.optional (cfg.jwtKey != null) "jwt:${cfg.jwtKey}";
         DynamicUser = true;

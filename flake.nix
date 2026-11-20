@@ -131,6 +131,18 @@
         cred-no-container = import ./nix/cred-no-container.nix { inherit pkgs self nixpkgs; };
         cred-rename-vm = import ./nix/cred-rename-test.nix { inherit pkgs self; };
         workload-vm = import ./nix/workload-test.nix { inherit pkgs self; };
+        workload-machines-vm = import ./nix/workload-machine-test.nix { inherit pkgs self; };
+        # The workload package's unit tests (the hush package's own checkPhase covers only subPackages "."), run on a
+        # build node, never on the operator's box.
+        workload-unit = self.packages.x86_64-linux.hush.overrideAttrs (_: {
+          pname = "hush-workload-unit";
+          doCheck = true;
+          checkPhase = ''
+            runHook preCheck
+            go test ./workload/
+            runHook postCheck
+          '';
+        });
       };
 
       devShells = forAllSystems ({ pkgs }: let

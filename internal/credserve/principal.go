@@ -20,6 +20,8 @@ type PrincipalAuth struct {
 	Credentials map[string]bool
 	Login       bool
 	Refresh     bool
+
+	RefreshCredentials map[string]bool
 }
 
 // ResolvePrincipals turns the config's principals into uid sets, using
@@ -27,7 +29,7 @@ type PrincipalAuth struct {
 func ResolvePrincipals(c *Config, lookup func(string) (uint32, error)) (map[string]PrincipalAuth, error) {
 	out := make(map[string]PrincipalAuth, len(c.Principals))
 	for name, p := range c.Principals {
-		pa := PrincipalAuth{Name: name, UIDs: map[uint32]bool{}, Credentials: map[string]bool{}, Login: p.Login, Refresh: p.Refresh}
+		pa := PrincipalAuth{Name: name, UIDs: map[uint32]bool{}, Credentials: map[string]bool{}, Login: p.Login, Refresh: p.Refresh, RefreshCredentials: map[string]bool{}}
 		for _, u := range p.Users {
 			uid, err := lookup(u)
 			if err != nil {
@@ -37,6 +39,9 @@ func ResolvePrincipals(c *Config, lookup func(string) (uint32, error)) (map[stri
 		}
 		for _, cred := range p.Credentials {
 			pa.Credentials[cred] = true
+		}
+		for _, cred := range p.RefreshCredentials {
+			pa.RefreshCredentials[cred] = true
 		}
 		out[name] = pa
 	}
@@ -93,7 +98,7 @@ func (s *Server) servePrincipal(w http.ResponseWriter, r *http.Request, name str
 	if p.Login && s.loginRoute(w, r) {
 		return
 	}
-	if p.Refresh && s.refreshRoute(w, r) {
+	if p.Refresh && s.principalRefresh(w, r, p, uid) {
 		return
 	}
 	cred, found := strings.CutPrefix(r.URL.Path, "/cred/")
@@ -129,6 +134,28 @@ func (s *Server) servePrincipal(w http.ResponseWriter, r *http.Request, name str
 		}
 	}
 	s.answer(w, cred)
+}
+
+func (s *Server) principalRefresh(w http.ResponseWriter, r *http.Request, p PrincipalAuth, uid uint32) bool {
+	rec := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
+	var grant *ConsentGrant
+	var used string
+	handled := s.refreshRoute(rec, r, func(cred string) bool {
+		if p.RefreshCredentials[cred] {
+			return true
+		}
+		g, err := s.authorizeCred(p, cred)
+		if err != nil {
+			s.logger.Printf("cred: REFUSED refresh of %s for principal %s uid %d: not granted", cred, p.Name, uid)
+			return false
+		}
+		grant, used = g, cred
+		return true
+	})
+	if grant != nil {
+		s.logConsentUse(grant, p.Name, used, uid, rec.status)
+	}
+	return handled
 }
 
 // statusRecorder remembers the status a handler wrote, for the audit line.

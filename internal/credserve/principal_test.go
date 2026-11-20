@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"filippo.io/age"
 
@@ -265,12 +266,15 @@ client_id = "Iv1.x"
 		body string
 		want string
 	}{
-		"neither":        {inst, "allow_user or at least one [principals] entry"},
-		"no users":       {inst + "[principals.p]\ncredentials = [\"a\"]\n", "users is required"},
-		"unknown cred":   {inst + "[principals.p]\nusers = [\"x\"]\ncredentials = [\"b\"]\n", `credential "b" is not an instance`},
-		"relative sock":  {inst + "[principals.p]\nusers = [\"x\"]\ncredentials = [\"a\"]\nsocket = \"p.sock\"\n", "not an absolute path"},
-		"bad name":       {inst + "[principals.P]\nusers = [\"x\"]\ncredentials = [\"a\"]\n", "principal name"},
-		"no credentials": {inst + "[principals.p]\nusers = [\"x\"]\n", "credentials is required"},
+		"neither":                    {inst, "allow_user or at least one [principals] entry"},
+		"no users":                   {inst + "[principals.p]\ncredentials = [\"a\"]\n", "users is required"},
+		"unknown cred":               {inst + "[principals.p]\nusers = [\"x\"]\ncredentials = [\"b\"]\n", `credential "b" is not an instance`},
+		"relative sock":              {inst + "[principals.p]\nusers = [\"x\"]\ncredentials = [\"a\"]\nsocket = \"p.sock\"\n", "not an absolute path"},
+		"bad name":                   {inst + "[principals.P]\nusers = [\"x\"]\ncredentials = [\"a\"]\n", "principal name"},
+		"no credentials":             {inst + "[principals.p]\nusers = [\"x\"]\n", "credentials is required"},
+		"unknown refresh credential": {inst + "[principals.p]\nusers = [\"x\"]\nrefresh = true\nrefresh_credentials = [\"b\"]\n", `refresh_credentials "b" is not an instance`},
+		"scope without the route":    {inst + "[principals.p]\nusers = [\"x\"]\ncredentials = [\"a\"]\nrefresh_credentials = [\"a\"]\n", "refresh_credentials needs refresh = true"},
+		"route that grants nothing":  {inst + "[principals.p]\nusers = [\"x\"]\nlogin = true\nrefresh = true\n", "refresh = true grants no instance"},
 	} {
 		_, err := ParseConfig([]byte(base + tc.body))
 		if err == nil || !strings.Contains(err.Error(), tc.want) {
@@ -280,7 +284,7 @@ client_id = "Iv1.x"
 	if _, err := ParseConfig([]byte(base + inst + "[principals.p]\nusers = [\"x\"]\ncredentials = [\"a\"]\nsocket = \"/run/band-cred/p.sock\"\n")); err != nil {
 		t.Fatalf("a principal-only config must parse: %v", err)
 	}
-	if _, err := ParseConfig([]byte(base + inst + "[principals.p]\nusers = [\"x\"]\nrefresh = true\nsocket = \"/run/band-cred/p.sock\"\n")); err != nil {
+	if _, err := ParseConfig([]byte(base + inst + "[principals.p]\nusers = [\"x\"]\nrefresh = true\nrefresh_credentials = [\"a\"]\nsocket = \"/run/band-cred/p.sock\"\n")); err != nil {
 		t.Fatalf("a refresh-only principal must parse: %v", err)
 	}
 }
@@ -291,6 +295,7 @@ func TestRefreshPrincipalGetsStatusNeverAToken(t *testing.T) {
 users = ["me"]
 login = true
 refresh = true
+refresh_credentials = ["anthropic-work"]
 `)
 	a := p.request("drop", http.MethodPost, "/refresh/"+instName)
 	if a.status != 200 || strings.TrimSpace(a.raw) != `{"ready":true,"refreshed":true}` {
@@ -308,5 +313,68 @@ refresh = true
 	}
 	if strings.Contains(p.logs.String(), "at-") {
 		t.Fatalf("a token reached the log: %q", p.logs.String())
+	}
+}
+
+func TestRefreshIsRefusedForAnInstanceNotGrantedToThePrincipal(t *testing.T) {
+	path, put := consentFile(t)
+	p := newPrincipalRig(t, "me", `
+[principals.drop]
+users = ["me"]
+login = true
+refresh = true
+refresh_credentials = ["copilot-work"]
+`, withConsent(path))
+	put(grantsFile())
+	for _, name := range []string{instName, "no-such-credential"} {
+		a := p.request("drop", http.MethodPost, "/refresh/"+name)
+		if a.status != http.StatusForbidden || a.Error != "not_granted" {
+			t.Fatalf("refresh of %s outside the grants: got %d %q", name, a.status, a.raw)
+		}
+	}
+	if n := p.ep.posts.Load(); n != 0 {
+		t.Fatalf("a refused refresh reached the token endpoint %d times", n)
+	}
+	if !strings.Contains(p.logs.String(), "REFUSED refresh of "+instName+" for principal drop") {
+		t.Fatalf("the refusal was not logged: %q", p.logs.String())
+	}
+	a := p.request("legacy", http.MethodPost, "/refresh/"+instName)
+	if a.status != 200 || strings.TrimSpace(a.raw) != `{"ready":true,"refreshed":true}` {
+		t.Fatalf("the owner socket must refresh any instance: got %d %q", a.status, a.raw)
+	}
+}
+
+func TestRefreshFollowsConsentGrantsAndReadGrants(t *testing.T) {
+	for _, c := range []struct {
+		name    string
+		file    []byte
+		granted string
+		status  int
+		used    bool
+	}{
+		{name: "live consent grant", file: grantsFile(grantRow("drop", instName, time.Hour)), status: 200, used: true},
+		{name: "expired consent grant", file: grantsFile(grantRow("drop", instName, -time.Second)), status: 403},
+		{name: "consent grant for another principal", file: grantsFile(grantRow("someone-else", instName, time.Hour)), status: 403},
+		{name: "no grants file", file: nil, status: 403},
+		{name: "read grant in the config", file: grantsFile(), granted: `credentials = ["` + instName + `"]`, status: 200},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			path, put := consentFile(t)
+			p := newPrincipalRig(t, "", "[principals.drop]\nusers = [\"me\"]\nrefresh = true\nrefresh_credentials = [\"copilot-work\"]\n"+c.granted+"\n", withConsent(path))
+			put(c.file)
+			a := p.request("drop", http.MethodPost, "/refresh/"+instName)
+			if a.status != c.status {
+				t.Fatalf("got %d %q, want %d", a.status, a.raw, c.status)
+			}
+			if c.status == http.StatusForbidden && a.Error != "not_granted" {
+				t.Fatalf("refusal is not not_granted: %q", a.raw)
+			}
+			if used := strings.Contains(p.logs.String(), "consent-grant use"); used != c.used {
+				t.Fatalf("consent-grant use logged = %v, want %v: %q", used, c.used, p.logs.String())
+			}
+			if c.used && !strings.Contains(p.logs.String(), "principal=drop credential="+instName) {
+				t.Fatalf("the consent use names no principal and credential: %q", p.logs.String())
+			}
+		})
 	}
 }

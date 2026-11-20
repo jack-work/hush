@@ -56,6 +56,9 @@ func moveIntoScope(p placement, pid int) error {
 		if inScope(pid, name) {
 			return nil
 		}
+		if exited(pid) {
+			return fmt.Errorf("%d exited before it reached %s", pid, name)
+		}
 		select {
 		case <-ctx.Done():
 			return fmt.Errorf("%d was not in %s after %s", pid, name, scopeMoveWait)
@@ -67,4 +70,14 @@ func moveIntoScope(p placement, pid int) error {
 func inScope(pid int, scope string) bool {
 	raw, err := os.ReadFile(fmt.Sprintf("/proc/%d/cgroup", pid))
 	return err == nil && strings.Contains(string(raw), "/"+scope+"\n")
+}
+
+func exited(pid int) bool {
+	raw, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", pid))
+	if err != nil {
+		return true
+	}
+	s := string(raw)
+	fields := strings.Fields(s[strings.LastIndexByte(s, ')')+1:])
+	return len(fields) > 0 && (fields[0] == "Z" || fields[0] == "X")
 }

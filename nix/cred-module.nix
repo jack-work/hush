@@ -77,9 +77,9 @@ let
         description = "Allow the remote sign-in routes on this socket too.";
       };
       refresh = mkOption {
-        type = types.bool;
-        default = false;
-        description = "Allow POST /refresh/<name> on this socket too. It answers status, never a token.";
+        type = types.listOf types.str;
+        default = [ ];
+        description = "Instances this principal may refresh with POST /refresh/<name> on this socket. It answers status, never a token; any other instance is refused (403 not_granted).";
       };
       socketPath = mkOption {
         type = types.str;
@@ -155,10 +155,10 @@ let
     L = layouts.hush;
     builtin =
       lib.optionalAttrs (hushCfg.credUsers != [ ]) {
-        cred = { users = hushCfg.credUsers; credentials = lib.attrNames hushCfg.instances; login = false; refresh = false; socketPath = hushCfg.socketPath; };
+        cred = { users = hushCfg.credUsers; credentials = lib.attrNames hushCfg.instances; login = false; refresh = [ ]; socketPath = hushCfg.socketPath; };
       }
       // lib.optionalAttrs (hushCfg.dropUsers != [ ]) {
-        drop = { users = hushCfg.dropUsers; credentials = [ ]; login = true; refresh = true; socketPath = hushCfg.dropSocketPath; };
+        drop = { users = hushCfg.dropUsers; credentials = [ ]; login = true; refresh = hushCfg.dropRefresh; socketPath = hushCfg.dropSocketPath; };
       };
   in {
     owner = { user = L.user; path = hushCfg.adminSocketPath; group = L.user; mode = "0600"; unit = L.socketUnit "admin"; fdName = "admin"; };
@@ -180,7 +180,7 @@ let
       users = p.users;
       credentials = p.credentials;
       socket = p.socketPath;
-    } // lib.optionalAttrs p.login { login = true; } // lib.optionalAttrs p.refresh { refresh = true; };
+    } // lib.optionalAttrs p.login { login = true; } // lib.optionalAttrs (p.refresh != [ ]) { refresh = p.refresh; };
 
     instanceToml = i: lib.filterAttrs (_: v: v != null && v != "" && v != false) {
       kind = i.kind;
@@ -413,6 +413,16 @@ in
       description = ''
         Users who may sign an instance in or refresh it on the drop box (POST /login-start/<name>,
         /login-complete/<name>, /refresh/<name>). The drop box answers status, never a token. Empty: no drop box.
+      '';
+    };
+
+    dropRefresh = mkOption {
+      type = types.listOf types.str;
+      default = lib.attrNames config.services.hush.instances;
+      defaultText = lib.literalExpression "lib.attrNames config.services.hush.instances";
+      description = ''
+        Instances a dropUsers member may refresh on the drop box. A refresh of any other instance is
+        refused (403 not_granted). Sign-in is not scoped by this.
       '';
     };
 

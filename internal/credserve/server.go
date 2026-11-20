@@ -130,7 +130,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.serveStatus(w, r)
 		return
 	}
-	if s.refreshRoute(w, r) {
+	if s.refreshRoute(w, r, nil) {
 		return
 	}
 	name, found := strings.CutPrefix(r.URL.Path, "/cred/")
@@ -149,7 +149,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	s.answer(w, name)
 }
 
-func (s *Server) refreshRoute(w http.ResponseWriter, r *http.Request) bool {
+func (s *Server) refreshRoute(w http.ResponseWriter, r *http.Request, bound func(string) bool) bool {
 	name, found := strings.CutPrefix(r.URL.Path, "/refresh/")
 	if !found {
 		return false
@@ -160,6 +160,10 @@ func (s *Server) refreshRoute(w http.ResponseWriter, r *http.Request) bool {
 	}
 	if r.Method != http.MethodPost {
 		writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "POST only")
+		return true
+	}
+	if bound != nil && !bound(name) {
+		writeError(w, http.StatusForbidden, "not_granted", "refresh of this credential is not granted to this principal")
 		return true
 	}
 	if _, ok := s.cfg.Instances[name]; !ok {

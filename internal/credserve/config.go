@@ -47,7 +47,7 @@ type Principal struct {
 	Credentials []string `toml:"credentials"`
 	Socket      string   `toml:"socket"`
 	Login       bool     `toml:"login"`
-	Refresh     bool     `toml:"refresh"`
+	Refresh     []string `toml:"refresh"`
 }
 
 type Config struct {
@@ -125,12 +125,17 @@ func (p Principal) validate(name string, instances map[string]Instance) error {
 			return fail("an empty user")
 		}
 	}
-	if len(p.Credentials) == 0 && !p.Login && !p.Refresh {
+	if len(p.Credentials) == 0 && !p.Login && len(p.Refresh) == 0 {
 		return fail("credentials is required")
 	}
 	for _, cred := range p.Credentials {
 		if _, ok := instances[cred]; !ok {
 			return fail("credential %q is not an instance", cred)
+		}
+	}
+	for _, cred := range p.Refresh {
+		if _, ok := instances[cred]; !ok {
+			return fail("refresh %q is not an instance", cred)
 		}
 	}
 	if p.Socket != "" && !strings.HasPrefix(p.Socket, "/") {

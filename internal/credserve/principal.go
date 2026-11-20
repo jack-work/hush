@@ -19,7 +19,7 @@ type PrincipalAuth struct {
 	UIDs        map[uint32]bool
 	Credentials map[string]bool
 	Login       bool
-	Refresh     bool
+	Refresh     map[string]bool
 }
 
 // ResolvePrincipals turns the config's principals into uid sets, using
@@ -27,7 +27,7 @@ type PrincipalAuth struct {
 func ResolvePrincipals(c *Config, lookup func(string) (uint32, error)) (map[string]PrincipalAuth, error) {
 	out := make(map[string]PrincipalAuth, len(c.Principals))
 	for name, p := range c.Principals {
-		pa := PrincipalAuth{Name: name, UIDs: map[uint32]bool{}, Credentials: map[string]bool{}, Login: p.Login, Refresh: p.Refresh}
+		pa := PrincipalAuth{Name: name, UIDs: map[uint32]bool{}, Credentials: map[string]bool{}, Login: p.Login, Refresh: map[string]bool{}}
 		for _, u := range p.Users {
 			uid, err := lookup(u)
 			if err != nil {
@@ -37,6 +37,9 @@ func ResolvePrincipals(c *Config, lookup func(string) (uint32, error)) (map[stri
 		}
 		for _, cred := range p.Credentials {
 			pa.Credentials[cred] = true
+		}
+		for _, cred := range p.Refresh {
+			pa.Refresh[cred] = true
 		}
 		out[name] = pa
 	}
@@ -93,7 +96,13 @@ func (s *Server) servePrincipal(w http.ResponseWriter, r *http.Request, name str
 	if p.Login && s.loginRoute(w, r) {
 		return
 	}
-	if p.Refresh && s.refreshRoute(w, r) {
+	if len(p.Refresh) > 0 && s.refreshRoute(w, r, func(cred string) bool {
+		if p.Refresh[cred] {
+			return true
+		}
+		s.logger.Printf("cred: REFUSED refresh of %s for principal %s uid %d: not bound", cred, name, uid)
+		return false
+	}) {
 		return
 	}
 	cred, found := strings.CutPrefix(r.URL.Path, "/cred/")

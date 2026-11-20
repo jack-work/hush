@@ -260,12 +260,13 @@ client_id = "Iv1.x"
 		body string
 		want string
 	}{
-		"neither":        {inst, "allow_user or at least one [principals] entry"},
-		"no users":       {inst + "[principals.p]\ncredentials = [\"a\"]\n", "users is required"},
-		"unknown cred":   {inst + "[principals.p]\nusers = [\"x\"]\ncredentials = [\"b\"]\n", `credential "b" is not an instance`},
-		"relative sock":  {inst + "[principals.p]\nusers = [\"x\"]\ncredentials = [\"a\"]\nsocket = \"p.sock\"\n", "not an absolute path"},
-		"bad name":       {inst + "[principals.P]\nusers = [\"x\"]\ncredentials = [\"a\"]\n", "principal name"},
-		"no credentials": {inst + "[principals.p]\nusers = [\"x\"]\n", "credentials is required"},
+		"neither":         {inst, "allow_user or at least one [principals] entry"},
+		"no users":        {inst + "[principals.p]\ncredentials = [\"a\"]\n", "users is required"},
+		"unknown cred":    {inst + "[principals.p]\nusers = [\"x\"]\ncredentials = [\"b\"]\n", `credential "b" is not an instance`},
+		"relative sock":   {inst + "[principals.p]\nusers = [\"x\"]\ncredentials = [\"a\"]\nsocket = \"p.sock\"\n", "not an absolute path"},
+		"bad name":        {inst + "[principals.P]\nusers = [\"x\"]\ncredentials = [\"a\"]\n", "principal name"},
+		"no credentials":  {inst + "[principals.p]\nusers = [\"x\"]\n", "credentials is required"},
+		"unknown refresh": {inst + "[principals.p]\nusers = [\"x\"]\nrefresh = [\"b\"]\n", `refresh "b" is not an instance`},
 	} {
 		_, err := ParseConfig([]byte(base + tc.body))
 		if err == nil || !strings.Contains(err.Error(), tc.want) {
@@ -275,7 +276,7 @@ client_id = "Iv1.x"
 	if _, err := ParseConfig([]byte(base + inst + "[principals.p]\nusers = [\"x\"]\ncredentials = [\"a\"]\nsocket = \"/run/band-cred/p.sock\"\n")); err != nil {
 		t.Fatalf("a principal-only config must parse: %v", err)
 	}
-	if _, err := ParseConfig([]byte(base + inst + "[principals.p]\nusers = [\"x\"]\nrefresh = true\nsocket = \"/run/band-cred/p.sock\"\n")); err != nil {
+	if _, err := ParseConfig([]byte(base + inst + "[principals.p]\nusers = [\"x\"]\nrefresh = [\"a\"]\nsocket = \"/run/band-cred/p.sock\"\n")); err != nil {
 		t.Fatalf("a refresh-only principal must parse: %v", err)
 	}
 }
@@ -285,7 +286,7 @@ func TestRefreshPrincipalGetsStatusNeverAToken(t *testing.T) {
 [principals.drop]
 users = ["me"]
 login = true
-refresh = true
+refresh = ["anthropic-work"]
 `)
 	a := p.request("drop", http.MethodPost, "/refresh/"+instName)
 	if a.status != 200 || strings.TrimSpace(a.raw) != `{"ready":true,"refreshed":true}` {
@@ -303,5 +304,30 @@ refresh = true
 	}
 	if strings.Contains(p.logs.String(), "at-") {
 		t.Fatalf("a token reached the log: %q", p.logs.String())
+	}
+}
+
+func TestRefreshIsRefusedForAnInstanceThePrincipalIsNotBoundTo(t *testing.T) {
+	p := newPrincipalRig(t, "me", `
+[principals.drop]
+users = ["me"]
+login = true
+refresh = ["copilot-work"]
+`)
+	for _, name := range []string{instName, "no-such-credential"} {
+		a := p.request("drop", http.MethodPost, "/refresh/"+name)
+		if a.status != http.StatusForbidden || !strings.Contains(a.raw, "not_granted") {
+			t.Fatalf("refresh of %s outside the binding: got %d %q", name, a.status, a.raw)
+		}
+	}
+	if n := p.ep.posts.Load(); n != 0 {
+		t.Fatalf("a refused refresh reached the token endpoint %d times", n)
+	}
+	if !strings.Contains(p.logs.String(), "REFUSED refresh of "+instName+" for principal drop") {
+		t.Fatalf("the refusal was not logged: %q", p.logs.String())
+	}
+	a := p.request("legacy", http.MethodPost, "/refresh/"+instName)
+	if a.status != 200 || strings.TrimSpace(a.raw) != `{"ready":true,"refreshed":true}` {
+		t.Fatalf("the owner socket must refresh any instance: got %d %q", a.status, a.raw)
 	}
 }

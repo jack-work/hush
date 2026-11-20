@@ -82,7 +82,7 @@ func (s Sandboxes) valid() error {
 		if _, _, ok := stripGeneration(name + "-g1"); !ok || generation.MatchString(name) {
 			return fmt.Errorf("sandboxes: machine name %q", name)
 		}
-		if uint64(s.Base)+uint64(slot.K+1)*uint64(s.Size) > 1<<32 {
+		if uint64(s.Base)+(uint64(slot.K)+1)*uint64(s.Size) > 1<<32 { // k+1 in 64 bits: uint32 2^32-1 + 1 wraps to 0
 			return fmt.Errorf("sandboxes: %s: range k=%d overflows", name, slot.K)
 		}
 		if other, dup := seen[slot.K]; dup {

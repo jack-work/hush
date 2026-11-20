@@ -129,6 +129,7 @@
       in {
         cred-vm = import ./nix/cred-test.nix { inherit pkgs self; };
         cred-no-container = import ./nix/cred-no-container.nix { inherit pkgs self nixpkgs; };
+        cred-config-parse = import ./nix/cred-config-parse.nix { inherit pkgs self nixpkgs; };
         cred-rename-vm = import ./nix/cred-rename-test.nix { inherit pkgs self; };
         workload-vm = import ./nix/workload-test.nix { inherit pkgs self; };
       };
